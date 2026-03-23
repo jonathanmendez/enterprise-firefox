@@ -8,8 +8,8 @@ use crate::std::{
     cell::RefCell,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering::Relaxed},
         Arc, Mutex, Weak,
+        atomic::{AtomicBool, Ordering::Relaxed},
     },
 };
 use crate::{
@@ -281,13 +281,13 @@ impl ReportCrash {
     /// result in None being returned to consider the crash report submission as a failure even
     /// though the server did provide a response.
     fn handle_crash_report_response(
-        &self,
+        config: &Arc<Config>,
         response: net::report::Response,
     ) -> anyhow::Result<Option<String>> {
         if let Some(version) = response.stop_sending_reports_for {
             // Create the EOL version file. The content seemingly doesn't matter, but we mimic what
             // was written by the old crash reporter.
-            if let Err(e) = std::fs::write(self.config.version_eol_file(&version), "1\n") {
+            if let Err(e) = std::fs::write(config.version_eol_file(&version), "1\n") {
                 log::warn!("failed to write EOL file: {e}");
             }
         }
@@ -303,7 +303,7 @@ impl ReportCrash {
         };
 
         // Write the id to the `submitted` directory
-        let submitted_dir = self.config.submitted_crash_dir();
+        let submitted_dir = config.submitted_crash_dir();
         std::fs::create_dir_all(&submitted_dir).with_context(|| {
             format!(
                 "failed to create submitted crash directory {}",
@@ -326,7 +326,7 @@ impl ReportCrash {
         if let Err(e) = writeln!(
             &mut file,
             "{}",
-            self.config
+            config
                 .build_string("crashreporter-crash-identifier")
                 .arg("id", &crash_id)
                 .get()
@@ -341,7 +341,7 @@ impl ReportCrash {
             if let Err(e) = writeln!(
                 &mut file,
                 "{}",
-                self.config
+                config
                     .build_string("crashreporter-crash-details")
                     .arg("url", url)
                     .get()
@@ -359,13 +359,16 @@ impl ReportCrash {
     /// Write the submission event.
     ///
     /// A `None` crash_id indicates that the submission failed.
-    fn write_submission_event(&self, crash_id: Option<String>) -> anyhow::Result<()> {
-        let Some(events_dir) = &self.config.events_dir else {
+    fn write_submission_event(
+        config: &Arc<Config>,
+        crash_id: Option<String>,
+    ) -> anyhow::Result<()> {
+        let Some(events_dir) = &config.events_dir else {
             // If there's no events dir, don't do anything.
             return Ok(());
         };
 
-        let local_id = self.config.local_dump_id();
+        let local_id = config.local_dump_id();
         let event_path = events_dir.join(format!("{local_id}-submission"));
 
         let unix_epoch_seconds = std::time::SystemTime::now()
@@ -442,6 +445,8 @@ impl ReportCrash {
             s.spawn(move || {
                 let _logic_panic_handler = logic_panic_handler;
                 barrier.wait();
+                // TODO insert try_send here?
+                // let _send_result = self.try_send().unwrap_or(false);
                 while let Ok(f) = logic_recv.recv() {
                     f(self);
                 }
@@ -627,62 +632,72 @@ impl ReportCrash {
         };
 
         // Send the report to the server.
-        let memory_file = self.config.memory_file();
-        let report = net::report::CrashReport {
-            extra: &extra,
-            dump_file: self.config.dump_file(),
-            memory_file: memory_file.as_deref(),
-            url,
-        };
+        let config = self.config.clone();
+        let extra = extra.clone();
+        let dump_file = config.dump_file().to_path_buf();
+        let memory_file = config.memory_file().map(|p| p.to_path_buf());
+        let url = url.to_string();
+        let ui = self.ui.clone();
 
         // Normally we might want to do the following asynchronously since it will block,
         // however we don't really need the Logic thread to do anything else (the UI
         // becomes disabled from this point onward), so we just do it here. Same goes for
         // the `std::thread::sleep` in close_window() later on.
-        let report_response = report.send().map(Some).unwrap_or_else(|e| {
-            log::error!("failed to send report: {e:#}");
-            None
-        });
+        let report_received = std::thread::spawn(move || {
+            let report = net::report::CrashReport {
+                extra: &extra,
+                dump_file: &dump_file,
+                memory_file: memory_file.as_deref(),
+                url: &url,
+            };
+            let report_response = report.send().map(Some).unwrap_or_else(|e| {
+                log::error!("failed to send report: {e:#}");
+                None
+            });
 
-        let report_received = report_response.is_some();
-        let crash_id = report_response.and_then(|response| {
-            self.handle_crash_report_response(response)
-                .unwrap_or_else(|e| {
+            let report_received = report_response.is_some();
+            let crash_id = report_response.and_then(|response| {
+                Self::handle_crash_report_response(&config, response).unwrap_or_else(|e| {
                     log::error!("failed to handle crash report response: {e}");
                     None
                 })
-        });
+            });
 
-        if report_received {
-            // If the response could be handled (indicated by the returned crash id), clean up by
-            // deleting the minidump files. Otherwise, prune old minidump files.
-            if crash_id.is_some() {
-                self.config.delete_files();
-            } else {
-                if let Err(e) = self.config.prune_files() {
-                    log::warn!("failed to prune files: {e}");
+            if report_received {
+                // If the response could be handled (indicated by the returned crash id), clean up by
+                // deleting the minidump files. Otherwise, prune old minidump files.
+                if crash_id.is_some() {
+                    config.delete_files();
+                } else {
+                    if let Err(e) = config.prune_files() {
+                        log::warn!("failed to prune files: {e}");
+                    }
                 }
             }
-        }
 
-        if let Err(e) = self.write_submission_event(crash_id) {
-            log::warn!("failed to write submission event: {e}");
-        }
+            if let Err(e) = Self::write_submission_event(&config, crash_id) {
+                log::warn!("failed to write submission event: {e}");
+            }
 
-        // Indicate whether the report was sent successfully, regardless of whether the response
-        // was processed successfully.
-        //
-        // FIXME: this is how the old crash reporter worked, but we might want to change this
-        // behavior.
-        if let Some(ui) = &self.ui {
-            ui.push(move |r| {
-                *r.submit_state.borrow_mut() = if report_received {
-                    SubmitState::Success
-                } else {
-                    SubmitState::Failure
-                }
-            });
-        }
+            // Indicate whether the report was sent successfully, regardless of whether the response
+            // was processed successfully.
+            //
+            // FIXME: this is how the old crash reporter worked, but we might want to change this
+            // behavior.
+            if let Some(ui) = &ui {
+                ui.push(move |r| {
+                    *r.submit_state.borrow_mut() = if report_received {
+                        SubmitState::Success
+                    } else {
+                        SubmitState::Failure
+                    }
+                });
+            }
+
+            report_received
+        })
+        .join()
+        .expect("The send thread has panicked");
 
         Some(report_received)
     }
@@ -691,6 +706,7 @@ impl ReportCrash {
     fn current_extra_data(&self) -> serde_json::Value {
         let include_address = self.settings.borrow().include_url;
         let comment = if !self.config.auto_submit {
+            // TODO nothing to do?
             self.ui().wait(|r| r.comment.get())
         } else {
             Default::default()
