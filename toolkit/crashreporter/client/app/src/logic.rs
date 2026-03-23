@@ -638,12 +638,15 @@ impl ReportCrash {
         let memory_file = config.memory_file().map(|p| p.to_path_buf());
         let url = url.to_string();
         let ui = self.ui.clone();
-
+        #[cfg(mock)]
+        let mock_data = crate::std::mock::SharedMockData::new();
         // Normally we might want to do the following asynchronously since it will block,
         // however we don't really need the Logic thread to do anything else (the UI
         // becomes disabled from this point onward), so we just do it here. Same goes for
         // the `std::thread::sleep` in close_window() later on.
-        let report_received = std::thread::spawn(move || {
+        let report_received = crate::std::thread::spawn(move || {
+            #[cfg(mock)]
+            unsafe { mock_data.set() };
             let report = net::report::CrashReport {
                 extra: &extra,
                 dump_file: &dump_file,
