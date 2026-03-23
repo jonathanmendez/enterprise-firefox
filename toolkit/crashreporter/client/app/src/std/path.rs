@@ -108,6 +108,10 @@ impl Path {
     pub fn ancestors(&self) -> Ancestors<'_> {
         Ancestors(self.0.ancestors())
     }
+
+    pub fn to_path_buf(&self) -> PathBuf {
+        PathBuf(self.0.to_path_buf())
+    }
 }
 
 #[repr(transparent)]
