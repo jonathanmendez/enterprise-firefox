@@ -33,6 +33,7 @@ pub struct ReportCrash {
     settings_file: PathBuf,
     attempted_to_send: AtomicBool,
     ui: Option<Arc<AsyncTask<ReportCrashUIState>>>,
+    logic_queue: Option<AsyncTask<ReportCrash>>,
     memtest: RefCell<Option<Memtest>>,
 }
 
@@ -96,6 +97,7 @@ impl ReportCrash {
             settings: settings.into(),
             attempted_to_send: Default::default(),
             ui: None,
+            logic_queue: None,
             memtest: None.into(),
         })
     }
@@ -410,6 +412,8 @@ impl ReportCrash {
                 let _ = logic_send.lock().unwrap().send(f);
             }
         });
+
+        self.logic_queue = Some(logic_remote_queue.clone());
 
         let crash_ui = ReportCrashUI::new(
             &*self.settings.borrow(),
