@@ -4,6 +4,8 @@
 
 //! Business logic for the crash reporter.
 
+use ::std::thread::JoinHandle;
+
 use crate::std::{
     cell::RefCell,
     path::{Path, PathBuf},
@@ -571,6 +573,12 @@ impl ReportCrash {
     /// Returns whether the report was received (regardless of whether the response was processed
     /// successfully), if a report could be sent at all (based on the configuration).
     fn try_send(&self) -> Option<bool> {
+        self.try_send_async().and_then(|j| {
+            Some(j.join().expect("try_send_async panicked"))
+        })
+    }
+
+    fn try_send_async(&self) -> Option<JoinHandle<bool>> {
         // Whether the user wants to submit the report or not, we record that we attempted a send
         // (so to speak), confirming that we got to the point of user input. This will retain the
         // crash files rather than deleting them. E.g., the user may want to submit it later through
@@ -648,7 +656,7 @@ impl ReportCrash {
         // however we don't really need the Logic thread to do anything else (the UI
         // becomes disabled from this point onward), so we just do it here. Same goes for
         // the `std::thread::sleep` in close_window() later on.
-        let report_received = crate::std::thread::spawn(move || {
+        let join_handle = crate::std::thread::spawn(move || {
             #[cfg(mock)]
             unsafe { mock_data.set() };
             let report = net::report::CrashReport {
@@ -702,11 +710,9 @@ impl ReportCrash {
             }
 
             report_received
-        })
-        .join()
-        .expect("The send thread has panicked");
+        });
 
-        Some(report_received)
+        Some(join_handle)
     }
 
     /// Form the extra data, taking into account user input.
