@@ -405,8 +405,13 @@ impl ReportCrash {
         self.config.restart_process();
     }
 
-    fn setup_logic_thread(&mut self) -> (Arc<Mutex<std::sync::mpsc::Sender<TaskFn<ReportCrash>>>>, std::sync::mpsc::Receiver<TaskFn<ReportCrash>>) {
-        use crate::std::{sync::mpsc};
+    fn setup_logic_thread(
+        &mut self,
+    ) -> (
+        Arc<Mutex<std::sync::mpsc::Sender<TaskFn<ReportCrash>>>>,
+        std::sync::mpsc::Receiver<TaskFn<ReportCrash>>,
+    ) {
+        use crate::std::sync::mpsc;
         let (logic_send, logic_recv) = mpsc::channel();
         // Wrap work_send in an Arc so that it can be captured weakly by the work queue and
         // drop when the UI finishes, including panics (allowing the logic thread to exit).
@@ -428,8 +433,12 @@ impl ReportCrash {
     }
 
     /// Run the crash reporting UI.
-    fn run_ui(&mut self, logic_send: Arc<Mutex<std::sync::mpsc::Sender<TaskFn<ReportCrash>>>>, logic_recv: std::sync::mpsc::Receiver<TaskFn<ReportCrash>>) {
-        use crate::std::{thread};
+    fn run_ui(
+        &mut self,
+        logic_send: Arc<Mutex<std::sync::mpsc::Sender<TaskFn<ReportCrash>>>>,
+        logic_recv: std::sync::mpsc::Receiver<TaskFn<ReportCrash>>,
+    ) {
+        use crate::std::thread;
 
         let crash_ui = ReportCrashUI::new(
             &*self.settings.borrow(),
@@ -465,8 +474,6 @@ impl ReportCrash {
             s.spawn(move || {
                 let _logic_panic_handler = logic_panic_handler;
                 barrier.wait();
-                // TODO insert try_send here?
-                // let _send_result = self.try_send().unwrap_or(false);
                 while let Ok(f) = logic_recv.recv() {
                     f(self);
                 }
@@ -590,9 +597,8 @@ impl ReportCrash {
     /// Returns whether the report was received (regardless of whether the response was processed
     /// successfully), if a report could be sent at all (based on the configuration).
     fn try_send(&self) -> Option<bool> {
-        self.try_send_async().and_then(|j| {
-            Some(j.join().expect("try_send_async panicked"))
-        })
+        self.try_send_async()
+            .and_then(|j| Some(j.join().expect("try_send_async panicked")))
     }
 
     fn try_send_async(&self) -> Option<JoinHandle<bool>> {
@@ -675,7 +681,9 @@ impl ReportCrash {
         // the `std::thread::sleep` in close_window() later on.
         let join_handle = crate::std::thread::spawn(move || {
             #[cfg(mock)]
-            unsafe { mock_data.set() };
+            unsafe {
+                mock_data.set()
+            };
             let report = net::report::CrashReport {
                 extra: &extra,
                 dump_file: &dump_file,
