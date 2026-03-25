@@ -140,10 +140,10 @@ macro_rules! current_date {
 const MOCK_CURRENT_TIME: &str = concat!(current_date!(), "T12:34:56.000Z");
 const MOCK_REMOTE_CRASH_ID: &str = "8cbb847c-def2-4f68-be9e-000000000000";
 
-fn current_datetime() -> ::time::OffsetDateTime {
-    ::time::OffsetDateTime::parse(
+fn current_datetime() -> time::OffsetDateTime {
+    time::OffsetDateTime::parse(
         MOCK_CURRENT_TIME,
-        &::time::format_description::well_known::Iso8601::DEFAULT,
+        &time::format_description::well_known::Iso8601::DEFAULT,
     )
     .unwrap()
 }
