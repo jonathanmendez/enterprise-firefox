@@ -762,7 +762,6 @@ impl ReportCrash {
     fn current_extra_data(&self) -> serde_json::Value {
         let include_address = self.settings.borrow().include_url;
         let comment = if !self.config.auto_submit {
-            // TODO nothing to do?
             self.ui().wait(|r| r.comment.get())
         } else {
             Default::default()
