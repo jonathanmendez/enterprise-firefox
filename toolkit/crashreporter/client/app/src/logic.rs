@@ -16,6 +16,7 @@ use crate::std::{
 };
 use crate::{
     async_task::AsyncTask,
+    async_task::TaskFn,
     config::Config,
     memory_test::child::Memtest,
     net,
@@ -37,6 +38,7 @@ pub struct ReportCrash {
     ui: Option<Arc<AsyncTask<ReportCrashUIState>>>,
     logic_queue: Option<AsyncTask<ReportCrash>>,
     memtest: RefCell<Option<Memtest>>,
+    pending_join: RefCell<Option<JoinHandle<bool>>>,
 }
 
 fn modify_extra_for_report(extra: &mut serde_json::Value) {
@@ -101,6 +103,7 @@ impl ReportCrash {
             ui: None,
             logic_queue: None,
             memtest: None.into(),
+            pending_join: None.into(),
         })
     }
 
@@ -117,7 +120,13 @@ impl ReportCrash {
         self.check_eol_version()?;
 
         if !self.config.auto_submit {
-            self.run_ui();
+            let (logic_send, logic_recv) = self.setup_logic_thread();
+            #[cfg(feature = "enterprise")]
+            if self.config.policy_auto_submit {
+                let logic = self.logic_queue.clone().unwrap();
+                logic.push(|s| *s.pending_join.borrow_mut() = s.try_send_async());
+            }
+            self.run_ui(logic_send, logic_recv);
         } else {
             anyhow::ensure!(self.try_send().unwrap_or(false), "failed to send report");
         }
@@ -396,10 +405,8 @@ impl ReportCrash {
         self.config.restart_process();
     }
 
-    /// Run the crash reporting UI.
-    fn run_ui(&mut self) {
-        use crate::std::{sync::mpsc, thread};
-
+    fn setup_logic_thread(&mut self) -> (Arc<Mutex<std::sync::mpsc::Sender<TaskFn<ReportCrash>>>>, std::sync::mpsc::Receiver<TaskFn<ReportCrash>>) {
+        use crate::std::{sync::mpsc};
         let (logic_send, logic_recv) = mpsc::channel();
         // Wrap work_send in an Arc so that it can be captured weakly by the work queue and
         // drop when the UI finishes, including panics (allowing the logic thread to exit).
@@ -417,10 +424,17 @@ impl ReportCrash {
 
         self.logic_queue = Some(logic_remote_queue.clone());
 
+        (logic_send, logic_recv)
+    }
+
+    /// Run the crash reporting UI.
+    fn run_ui(&mut self, logic_send: Arc<Mutex<std::sync::mpsc::Sender<TaskFn<ReportCrash>>>>, logic_recv: std::sync::mpsc::Receiver<TaskFn<ReportCrash>>) {
+        use crate::std::{thread};
+
         let crash_ui = ReportCrashUI::new(
             &*self.settings.borrow(),
             self.config.clone(),
-            logic_remote_queue,
+            self.logic_queue.clone().unwrap(),
         );
 
         // Set the UI remote queue.
@@ -455,6 +469,9 @@ impl ReportCrash {
                 // let _send_result = self.try_send().unwrap_or(false);
                 while let Ok(f) = logic_recv.recv() {
                     f(self);
+                }
+                if let Some(pending_join) = self.pending_join.take() {
+                    pending_join.join().expect("try_send_async panicked");
                 }
                 // Save settings after UI is closed
                 self.save_settings();
