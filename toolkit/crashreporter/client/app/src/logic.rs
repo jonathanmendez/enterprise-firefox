@@ -71,7 +71,38 @@ pub fn sha256_hash_file(path: &Path) -> crate::std::io::Result<String> {
 impl ReportCrash {
     pub fn new(config: Arc<Config>, extra: serde_json::Value) -> anyhow::Result<Self> {
         let settings_file = config.data_dir().join("crashreporter_settings.json");
-        let settings: Settings = match std::fs::File::open(&settings_file) {
+        let settings = {
+            #[cfg(feature = "enterprise")]
+            if config.policy_auto_submit {
+                Settings {
+                    submit_report: true,
+                    include_url: true,
+                    test_hardware: true,
+                }
+            } else {
+                ReportCrash::load_settings(&settings_file)
+            }
+
+            #[cfg(not(feature = "enterprise"))]
+            ReportCrash::load_settings(&settings_file)
+        };
+        log::debug!("loaded settings: {settings:?}");
+
+        Ok(ReportCrash {
+            config,
+            extra,
+            settings_file,
+            settings: settings.into(),
+            attempted_to_send: Default::default(),
+            ui: None,
+            logic_queue: None,
+            memtest: None.into(),
+            pending_join: None.into(),
+        })
+    }
+
+    fn load_settings(settings_file: &Path) -> Settings {
+        match std::fs::File::open(&settings_file) {
             Err(e) => {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     log::warn!(
@@ -90,21 +121,8 @@ impl ReportCrash {
                     Default::default()
                 }
                 Ok(s) => s,
-            },
-        };
-        log::debug!("loaded settings: {settings:?}");
-
-        Ok(ReportCrash {
-            config,
-            extra,
-            settings_file,
-            settings: settings.into(),
-            attempted_to_send: Default::default(),
-            ui: None,
-            logic_queue: None,
-            memtest: None.into(),
-            pending_join: None.into(),
-        })
+            }
+        }
     }
 
     /// Returns whether an attempt was made to send the report.
