@@ -1,0 +1,216 @@
+name: Auto Uplift
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  uplift:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'enterprise-main'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      REPO_URL: https://github.com/${{ github.repository }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Read labels
+        id: labels
+        run: |
+          labels='${{ toJson(github.event.pull_request.labels.*.name) }}'
+
+          [[ "$labels" == *"uplift-to-beta"* ]] && echo "beta=true" >> $GITHUB_OUTPUT
+          [[ "$labels" == *"uplift-to-release"* ]] && echo "release=true" >> $GITHUB_OUTPUT
+
+      # ----------------------------------------
+      # Shared uplift script
+      # ----------------------------------------
+      - name: Create uplift script
+        run: |
+          cat << 'EOF' > uplift.sh
+          set -e
+
+          TARGET=$1
+          SHA=$2
+
+          BRANCH="uplift-${TARGET}-${SHA}"
+          SUMMARY_FILE=summary.txt
+
+          echo "---- Uplifting to $TARGET ----"
+
+          git fetch origin $TARGET
+
+          # Skip entire operation if merge commit already in branch
+          if git branch -r --contains $SHA | grep -q "origin/$TARGET"; then
+            echo "Already fully present in $TARGET"
+            echo "summary=Already present, nothing to uplift." >> $GITHUB_OUTPUT
+            echo "branch=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Avoid duplicate branch
+          if git ls-remote --heads origin $BRANCH | grep -q $BRANCH; then
+            echo "Branch already exists, skipping"
+            echo "summary=Uplift branch already exists." >> $GITHUB_OUTPUT
+            echo "branch=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          git checkout -b $BRANCH origin/$TARGET
+
+          touch $SUMMARY_FILE
+
+          PARENTS=$(git rev-list --parents -n 1 $SHA)
+          COUNT=$(echo $PARENTS | wc -w)
+
+          APPLIED=0
+
+          if [ "$COUNT" -eq 3 ]; then
+            echo "Merge commit → multi-commit mode"
+
+            COMMITS=$(git log --reverse --no-merges --pretty=format:"%H" $SHA^1..$SHA^2)
+
+            for commit in $COMMITS; do
+              SHORT=$(git rev-parse --short $commit)
+              MSG=$(git log -1 --pretty=format:"%s" $commit)
+              LINK="$REPO_URL/commit/$commit"
+
+              if git branch -r --contains $commit | grep -q "origin/$TARGET"; then
+                echo "- [$SHORT]($LINK) $MSG (already in branch)" >> $SUMMARY_FILE
+                continue
+              fi
+
+              set +e
+              git cherry-pick -x -X theirs $commit
+              STATUS=$?
+              set -e
+
+              if [ $STATUS -ne 0 ]; then
+                # Check if it's an empty cherry-pick
+                if git diff --cached --quiet && git diff --quiet; then
+                  echo "Empty cherry-pick for $commit → skipping"
+
+                  git cherry-pick --skip
+
+                  echo "- [$SHORT]($LINK) $MSG (already applied)" >> $SUMMARY_FILE
+                  continue
+                fi
+
+                git add -A
+                git commit -m "Cherry-pick $commit with conflicts"
+                echo "- [$SHORT]($LINK) $MSG (⚠️ conflict)" >> $SUMMARY_FILE
+              else
+                echo "- [$SHORT]($LINK) $MSG" >> $SUMMARY_FILE
+              fi
+
+              APPLIED=1
+            done
+
+          else
+            echo "Single commit mode"
+
+            SHORT=$(git rev-parse --short $SHA)
+            MSG=$(git log -1 --pretty=format:"%s" $SHA)
+            LINK="$REPO_URL/commit/$SHA"
+
+            set +e
+            git cherry-pick -x -X theirs $SHA
+            STATUS=$?
+            set -e
+
+            if [ $STATUS -ne 0 ]; then
+              git add -A
+              git commit -m "Cherry-pick $SHA with conflicts"
+              echo "- [$SHORT]($LINK) $MSG (⚠️ conflict)" >> $SUMMARY_FILE
+            else
+              echo "- [$SHORT]($LINK) $MSG" >> $SUMMARY_FILE
+            fi
+
+            APPLIED=1
+          fi
+
+          if [ "$APPLIED" -eq 0 ]; then
+            echo "No new commits applied"
+            echo "summary=All commits already exist in $TARGET." >> $GITHUB_OUTPUT
+            echo "branch=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          git push origin $BRANCH
+
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+
+          DELIM="GITHUB_OUTPUT_$(uuidgen)"
+          echo "summary<<$DELIM" >> $GITHUB_OUTPUT
+          cat $SUMMARY_FILE >> $GITHUB_OUTPUT
+          echo "$DELIM" >> $GITHUB_OUTPUT
+          EOF
+
+      # ----------------------------------------
+      # BETA
+      # ----------------------------------------
+      - name: Uplift to enterprise-beta
+        if: steps.labels.outputs.beta == 'true'
+        id: beta_uplift
+        run: |
+          bash uplift.sh enterprise-beta $MERGE_SHA
+
+      - name: Create PR (enterprise-beta)
+        if: steps.labels.outputs.beta == 'true' && steps.beta_uplift.outputs.branch != ''
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ steps.beta_uplift.outputs.branch }}
+          base: enterprise-beta
+          title: "[enterprise-beta uplift] ${{ env.PR_TITLE }}"
+          labels: branch:beta,uplift
+          body: |
+            Uplift from #${{ env.PR_NUMBER }}
+
+            ## Commits
+            ${{ steps.beta_uplift.outputs.summary }}
+
+            ⚠️ Commits marked with conflicts require manual resolution.
+          team-reviewers: enterprise-firefox-engineering
+
+      # ----------------------------------------
+      # RELEASE
+      # ----------------------------------------
+      - name: Uplift to enterprise-release
+        if: steps.labels.outputs.release == 'true'
+        id: rel_uplift
+        run: |
+          bash uplift.sh enterprise-release $MERGE_SHA
+
+      - name: Create PR (enterprise-release)
+        if: steps.labels.outputs.release == 'true' && steps.rel_uplift.outputs.branch != ''
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ steps.rel_uplift.outputs.branch }}
+          base: enterprise-release
+          title: "[enterprise-release uplift] ${{ env.PR_TITLE }}"
+          labels: branch:release,uplift
+          body: |
+            Uplift from #${{ env.PR_NUMBER }}
+
+            ## Commits
+            ${{ steps.rel_uplift.outputs.summary }}
+
+            ⚠️ Commits marked with conflicts require manual resolution.
+          team-reviewers: enterprise-firefox-engineering
