@@ -109,7 +109,7 @@ jobs:
               fi
 
               set +e
-              git cherry-pick -x -X theirs $commit
+              git cherry-pick -x $commit
               STATUS=$?
               set -e
 
@@ -142,7 +142,7 @@ jobs:
             LINK="$REPO_URL/commit/$SHA"
 
             set +e
-            git cherry-pick -x -X theirs $SHA
+            git cherry-pick -x $SHA
             STATUS=$?
             set -e
 
