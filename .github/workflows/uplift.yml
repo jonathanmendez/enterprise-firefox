@@ -1,7 +1,18 @@
 name: Auto Uplift
 
 on:
-  pull_request:
+  # WARNING: pull_request_target MUST NOT be used if running code under control
+  # of the source PR [0], as it could risk leaking the GH_TOKENs.
+  #
+  # In this case, we do it as the job needs to run within the context of the
+  # target repo, so it can get a GH_TOKEN which it can use to comment on and
+  # update the PR.
+  #
+  # Crucially, no external code is loaded or run as part of this workflow.
+  #
+  # [0] https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target:~:text=Warning-,Running,websitehttps://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target:~:text=Warning-,Running,website
+  #
+  pull_request_target:
     types: [closed]
 
 jobs:
