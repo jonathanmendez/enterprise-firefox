@@ -47,8 +47,8 @@ jobs:
         run: |
           labels='${{ toJson(github.event.pull_request.labels.*.name) }}'
 
-          [[ "$labels" == *"uplift-to-beta"* ]] && echo "beta=true" >> $GITHUB_OUTPUT
-          [[ "$labels" == *"uplift-to-release"* ]] && echo "release=true" >> $GITHUB_OUTPUT
+          [[ "$labels" == *'"uplift-to-beta"'* ]] && echo "beta=true" >> $GITHUB_OUTPUT
+          [[ "$labels" == *'"uplift-to-release"'* ]] && echo "release=true" >> $GITHUB_OUTPUT
 
       # ----------------------------------------
       # Shared uplift script
