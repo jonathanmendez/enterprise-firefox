@@ -95,58 +95,36 @@ jobs:
 
           if [ "$COUNT" -eq 3 ]; then
             echo "Merge commit → multi-commit mode"
-
             COMMITS=$(git log --reverse --no-merges --pretty=format:"%H" $SHA^1..$SHA^2)
-
-            for commit in $COMMITS; do
-              SHORT=$(git rev-parse --short $commit)
-              MSG=$(git log -1 --pretty=format:"%s" $commit)
-              LINK="$REPO_URL/commit/$commit"
-
-              if git branch -r --contains $commit | grep -q "origin/$TARGET"; then
-                echo "- [$SHORT]($LINK) $MSG (already in branch)" >> $SUMMARY_FILE
-                continue
-              fi
-
-              set +e
-              git cherry-pick -x $commit
-              STATUS=$?
-              set -e
-
-              if [ $STATUS -ne 0 ]; then
-                # Check if it's an empty cherry-pick
-                if git diff --cached --quiet && git diff --quiet; then
-                  echo "Empty cherry-pick for $commit → skipping"
-
-                  git cherry-pick --skip
-
-                  echo "- [$SHORT]($LINK) $MSG (already applied)" >> $SUMMARY_FILE
-                  continue
-                fi
-
-                git add -A
-                git cherry-pick --continue
-                echo "- [$SHORT]($LINK) $MSG (⚠️ conflict)" >> $SUMMARY_FILE
-              else
-                echo "- [$SHORT]($LINK) $MSG" >> $SUMMARY_FILE
-              fi
-
-              APPLIED=1
-            done
-
           else
             echo "Single commit mode"
+            COMMITS=$SHA
+          fi
 
-            SHORT=$(git rev-parse --short $SHA)
-            MSG=$(git log -1 --pretty=format:"%s" $SHA)
-            LINK="$REPO_URL/commit/$SHA"
+          for commit in $COMMITS; do
+            SHORT=$(git rev-parse --short $commit)
+            MSG=$(git log -1 --pretty=format:"%s" $commit)
+            LINK="$REPO_URL/commit/$commit"
+
+            if git branch -r --contains $commit | grep -q "origin/$TARGET"; then
+              echo "- [$SHORT]($LINK) $MSG (already in branch)" >> $SUMMARY_FILE
+              continue
+            fi
 
             set +e
-            git cherry-pick -x $SHA
+            git cherry-pick -x $commit
             STATUS=$?
             set -e
 
             if [ $STATUS -ne 0 ]; then
+              # Detect empty cherry-pick
+              if git diff --cached --quiet && git diff --quiet; then
+                echo "Empty cherry-pick for $commit → skipping"
+                git cherry-pick --skip
+                echo "- [$SHORT]($LINK) $MSG (already applied)" >> $SUMMARY_FILE
+                continue
+              fi
+
               git add -A
               git cherry-pick --continue
               echo "- [$SHORT]($LINK) $MSG (⚠️ conflict)" >> $SUMMARY_FILE
@@ -155,7 +133,7 @@ jobs:
             fi
 
             APPLIED=1
-          fi
+          done
 
           if [ "$APPLIED" -eq 0 ]; then
             echo "No new commits applied"
