@@ -34,11 +34,9 @@ jobs:
           - target: enterprise-beta
             label_check: uplift-to-beta
             label: branch:beta
-            title_prefix: "[enterprise-beta uplift]"
           - target: enterprise-release
             label_check: uplift-to-release
             label: branch:release
-            title_prefix: "[enterprise-release uplift]"
 
     env:
       MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
@@ -192,7 +190,7 @@ jobs:
           gh pr create \
             --base "$TARGET" \
             --head "$BRANCH" \
-            --title "${{ matrix.title_prefix }} ${{ env.PR_TITLE }}" \
+            --title "[$TARGET uplift] ${{ env.PR_TITLE }}" \
             --body-file pr_body.txt \
             --label "${{ matrix.label }}" \
             --label "uplift" \
