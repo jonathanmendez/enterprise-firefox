@@ -103,7 +103,7 @@ jobs:
             COMMITS=$SHA
           fi
 
-          APPLIED=0
+          HAS_APPLIED_COMMITS=0
 
           for commit in $COMMITS; do
             SHORT=$(git rev-parse --short $commit)
@@ -136,10 +136,10 @@ jobs:
               echo "- [$SHORT]($LINK) $MSG" >> $SUMMARY_FILE
             fi
 
-            APPLIED=1
+            HAS_APPLIED_COMMITS=1
           done
 
-          if [ "$APPLIED" -eq 0 ]; then
+          if [ "$HAS_APPLIED_COMMITS" -eq 0 ]; then
             echo "No new commits applied"
             echo "summary=All commits already exist in $TARGET." >> $GITHUB_OUTPUT
             echo "branch=" >> $GITHUB_OUTPUT
