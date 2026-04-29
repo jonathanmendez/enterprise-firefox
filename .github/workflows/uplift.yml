@@ -167,20 +167,27 @@ jobs:
 
       - name: Create PR (enterprise-beta)
         if: steps.labels.outputs.beta == 'true' && steps.beta_uplift.outputs.branch != ''
-        uses: peter-evans/create-pull-request@v6
-        with:
-          branch: ${{ steps.beta_uplift.outputs.branch }}
-          base: enterprise-beta
-          title: "[enterprise-beta uplift] ${{ env.PR_TITLE }}"
-          labels: branch:beta,uplift
-          body: |
-            Uplift from #${{ env.PR_NUMBER }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="${{ steps.beta_uplift.outputs.branch }}"
 
-            ## Commits
-            ${{ steps.beta_uplift.outputs.summary }}
+          cat <<EOF > pr_body.txt
+          Uplift from #${{ env.PR_NUMBER }}
 
-            ⚠️ Commits marked with conflicts require manual resolution.
-          team-reviewers: enterprise-firefox-engineering
+          ## Commits
+          ${{ steps.beta_uplift.outputs.summary }}
+
+          ⚠️ Commits marked with conflicts require manual resolution.
+          EOF
+
+          gh pr create \
+            --base enterprise-beta \
+            --head "$BRANCH" \
+            --title "[enterprise-beta uplift] ${{ env.PR_TITLE }}" \
+            --body-file pr_body.txt \
+            --label "branch:beta,uplift" \
+            --reviewer "mozilla/enterprise-firefox-engineering"
 
       # ----------------------------------------
       # RELEASE
@@ -193,17 +200,24 @@ jobs:
 
       - name: Create PR (enterprise-release)
         if: steps.labels.outputs.release == 'true' && steps.rel_uplift.outputs.branch != ''
-        uses: peter-evans/create-pull-request@v6
-        with:
-          branch: ${{ steps.rel_uplift.outputs.branch }}
-          base: enterprise-release
-          title: "[enterprise-release uplift] ${{ env.PR_TITLE }}"
-          labels: branch:release,uplift
-          body: |
-            Uplift from #${{ env.PR_NUMBER }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="${{ steps.rel_uplift.outputs.branch }}"
 
-            ## Commits
-            ${{ steps.rel_uplift.outputs.summary }}
+          cat <<EOF > pr_body.txt
+          Uplift from #${{ env.PR_NUMBER }}
 
-            ⚠️ Commits marked with conflicts require manual resolution.
-          team-reviewers: enterprise-firefox-engineering
+          ## Commits
+          ${{ steps.rel_uplift.outputs.summary }}
+
+          ⚠️ Commits marked with conflicts require manual resolution.
+          EOF
+
+          gh pr create \
+            --base enterprise-release \
+            --head "$BRANCH" \
+            --title "[enterprise-release uplift] ${{ env.PR_TITLE }}" \
+            --body-file pr_body.txt \
+            --label "branch:release,uplift" \
+            --reviewer "mozilla/enterprise-firefox-engineering"
