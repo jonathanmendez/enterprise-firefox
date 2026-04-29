@@ -20,17 +20,32 @@ jobs:
     if: >
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'enterprise-main'
+
     runs-on: ubuntu-latest
 
     permissions:
       contents: write
       pull-requests: write
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: enterprise-beta
+            label_check: uplift-to-beta
+            label: branch:beta
+            title_prefix: "[enterprise-beta uplift]"
+          - target: enterprise-release
+            label_check: uplift-to-release
+            label: branch:release
+            title_prefix: "[enterprise-release uplift]"
+
     env:
       MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_TITLE: ${{ github.event.pull_request.title }}
       REPO_URL: https://github.com/${{ github.repository }}
+      TARGET: ${{ matrix.target }}
 
     steps:
       - uses: actions/checkout@v4
@@ -42,17 +57,17 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-      - name: Read labels
-        id: labels
+      - name: Check label
+        id: label_check
         run: |
           labels='${{ toJson(github.event.pull_request.labels.*.name) }}'
 
-          [[ "$labels" == *'"uplift-to-beta"'* ]] && echo "beta=true" >> $GITHUB_OUTPUT
-          [[ "$labels" == *'"uplift-to-release"'* ]] && echo "release=true" >> $GITHUB_OUTPUT
+          if [[ "$labels" == *"${{ matrix.label_check }}"* ]]; then
+            echo "run=true" >> $GITHUB_OUTPUT
+          else
+            echo "run=false" >> $GITHUB_OUTPUT
+          fi
 
-      # ----------------------------------------
-      # Shared uplift script
-      # ----------------------------------------
       - name: Create uplift script
         run: |
           cat << 'EOF' > uplift.sh
@@ -156,68 +171,33 @@ jobs:
           echo "$DELIM" >> $GITHUB_OUTPUT
           EOF
 
-      # ----------------------------------------
-      # BETA
-      # ----------------------------------------
-      - name: Uplift to enterprise-beta
-        if: steps.labels.outputs.beta == 'true'
-        id: beta_uplift
+      - name: Uplift
+        if: steps.label_check.outputs.run == 'true'
+        id: uplift
         run: |
-          bash uplift.sh enterprise-beta $MERGE_SHA
+          bash uplift.sh $TARGET $MERGE_SHA
 
-      - name: Create PR (enterprise-beta)
-        if: steps.labels.outputs.beta == 'true' && steps.beta_uplift.outputs.branch != ''
+      - name: Create PR
+        if: steps.label_check.outputs.run == 'true' && steps.uplift.outputs.branch != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BRANCH="${{ steps.beta_uplift.outputs.branch }}"
+          BRANCH="${{ steps.uplift.outputs.branch }}"
 
           cat <<EOF > pr_body.txt
           Uplift from #${{ env.PR_NUMBER }}
 
           ## Commits
-          ${{ steps.beta_uplift.outputs.summary }}
+          ${{ steps.uplift.outputs.summary }}
 
           ⚠️ Commits marked with conflicts require manual resolution.
           EOF
 
           gh pr create \
-            --base enterprise-beta \
+            --base "$TARGET" \
             --head "$BRANCH" \
-            --title "[enterprise-beta uplift] ${{ env.PR_TITLE }}" \
+            --title "${{ matrix.title_prefix }} ${{ env.PR_TITLE }}" \
             --body-file pr_body.txt \
-            --label "branch:beta,uplift" \
-            --reviewer "mozilla/enterprise-firefox-engineering"
-
-      # ----------------------------------------
-      # RELEASE
-      # ----------------------------------------
-      - name: Uplift to enterprise-release
-        if: steps.labels.outputs.release == 'true'
-        id: rel_uplift
-        run: |
-          bash uplift.sh enterprise-release $MERGE_SHA
-
-      - name: Create PR (enterprise-release)
-        if: steps.labels.outputs.release == 'true' && steps.rel_uplift.outputs.branch != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          BRANCH="${{ steps.rel_uplift.outputs.branch }}"
-
-          cat <<EOF > pr_body.txt
-          Uplift from #${{ env.PR_NUMBER }}
-
-          ## Commits
-          ${{ steps.rel_uplift.outputs.summary }}
-
-          ⚠️ Commits marked with conflicts require manual resolution.
-          EOF
-
-          gh pr create \
-            --base enterprise-release \
-            --head "$BRANCH" \
-            --title "[enterprise-release uplift] ${{ env.PR_TITLE }}" \
-            --body-file pr_body.txt \
-            --label "branch:release,uplift" \
+            --label "${{ matrix.label }}" \
+            --label "uplift" \
             --reviewer "mozilla/enterprise-firefox-engineering"
