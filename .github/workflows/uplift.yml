@@ -97,7 +97,7 @@ jobs:
           COUNT=$(echo $PARENTS | wc -w)
           if [ "$COUNT" -gt 2 ]; then
             echo "Merge commit → multi-commit mode"
-            COMMITS=$(git log --reverse --no-merges --pretty=format:"%H" $SHA^1..$SHA^2)
+            COMMITS=$(git rev-list --reverse --no-merges $SHA^1..$SHA)
           else
             echo "Single commit mode"
             COMMITS=$SHA
