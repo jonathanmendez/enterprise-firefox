@@ -46,29 +46,23 @@ jobs:
       PR_TITLE: ${{ github.event.pull_request.title }}
       REPO_URL: https://github.com/${{ github.repository }}
       TARGET: ${{ matrix.target }}
+      PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        if: contains(env.PR_LABELS, matrix.label_check)
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Configure git
+        if: contains(env.PR_LABELS, matrix.label_check)
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-      - name: Check label
-        id: label_check
-        run: |
-          labels='${{ toJson(github.event.pull_request.labels.*.name) }}'
-
-          if [[ "$labels" == *"${{ matrix.label_check }}"* ]]; then
-            echo "run=true" >> $GITHUB_OUTPUT
-          else
-            echo "run=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Create uplift script
+        if: contains(env.PR_LABELS, matrix.label_check)
         run: |
           cat << 'EOF' > uplift.sh
           set -e
@@ -172,13 +166,15 @@ jobs:
           EOF
 
       - name: Uplift
-        if: steps.label_check.outputs.run == 'true'
         id: uplift
+        if: contains(env.PR_LABELS, matrix.label_check)
         run: |
           bash uplift.sh $TARGET $MERGE_SHA
 
       - name: Create PR
-        if: steps.label_check.outputs.run == 'true' && steps.uplift.outputs.branch != ''
+        if: >
+          contains(env.PR_LABELS, matrix.label_check) &&
+          steps.uplift.outputs.branch != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
