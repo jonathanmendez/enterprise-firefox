@@ -5,8 +5,7 @@ on:
   # of the source PR [0], as it could risk leaking the GH_TOKENs.
   #
   # In this case, we do it as the job needs to run within the context of the
-  # target repo, so it can get a GH_TOKEN which it can use to comment on and
-  # update the PR.
+  # target repo, so it can get a GH_TOKEN which it can use to create a PR.
   #
   # Crucially, no external code is loaded or run as part of this workflow.
   #
@@ -19,7 +18,8 @@ jobs:
   uplift:
     if: >
       github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'enterprise-main'
+      github.event.pull_request.base.ref == matrix.source &&
+      contains(github.event.pull_request.labels.*.name, matrix.trigger_label)
 
     runs-on: ubuntu-latest
 
@@ -31,36 +31,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: enterprise-beta
-            label_check: uplift-to-beta
-            label: branch:beta
-          - target: enterprise-release
-            label_check: uplift-to-release
-            label: branch:release
+          - source: enterprise-main
+            target: enterprise-beta
+            trigger_label: uplift-to-beta
+            target_label: branch:beta
+          - source: enterprise-main
+            target: enterprise-release
+            trigger_label: uplift-to-release
+            target_label: branch:release
+          - source: enterprise-beta
+            target: enterprise-release
+            trigger_label: uplift-to-release
+            target_label: branch:release
 
     env:
       MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_TITLE: ${{ github.event.pull_request.title }}
       REPO_URL: https://github.com/${{ github.repository }}
-      TARGET: ${{ matrix.target }}
-      PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
 
     steps:
       - name: Checkout
-        if: contains(env.PR_LABELS, matrix.label_check)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Configure git
-        if: contains(env.PR_LABELS, matrix.label_check)
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
       - name: Create uplift script
-        if: contains(env.PR_LABELS, matrix.label_check)
         run: |
           cat << 'EOF' > uplift.sh
           set -e
@@ -165,14 +166,11 @@ jobs:
 
       - name: Uplift
         id: uplift
-        if: contains(env.PR_LABELS, matrix.label_check)
         run: |
-          bash uplift.sh $TARGET $MERGE_SHA
+          bash uplift.sh ${{ matrix.target }} $MERGE_SHA
 
       - name: Create PR
-        if: >
-          contains(env.PR_LABELS, matrix.label_check) &&
-          steps.uplift.outputs.branch != ''
+        if: steps.uplift.outputs.branch != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -188,10 +186,10 @@ jobs:
           EOF
 
           gh pr create \
-            --base "$TARGET" \
+            --base "${{ matrix.target }}" \
             --head "$BRANCH" \
-            --title "[$TARGET uplift] ${{ env.PR_TITLE }}" \
+            --title "[${{ matrix.target }} uplift] $PR_TITLE" \
             --body-file pr_body.txt \
-            --label "${{ matrix.label }}" \
+            --label "${{ matrix.target_label }}" \
             --label "uplift" \
             --reviewer "mozilla/enterprise-firefox-engineering"
