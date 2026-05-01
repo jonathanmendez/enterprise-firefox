@@ -212,11 +212,17 @@ jobs:
             EOF
           fi
 
-          gh pr create \
+          PR_URL=$(gh pr create \
             --base "${{ matrix.target }}" \
             --head "$BRANCH" \
             --title "[${{ matrix.target }} uplift] $PR_TITLE" \
             --body-file pr_body.txt \
             --label "${{ matrix.target_label }}" \
-            --label "uplift" \
-            --reviewer "mozilla/enterprise-firefox-engineering"
+            --label "uplift")
+
+          gh pr edit "$PR_URL" --add-reviewer "mozilla/enterprise-firefox-engineering"
+
+          # Add original author if conflicts happened, since manual resolution is required
+          if [ "${{ steps.uplift.outputs.has_conflicts }}" = "true" ]; then
+            gh pr edit "$PR_URL" --add-reviewer "${{ github.event.pull_request.user.login }}"
+          fi
