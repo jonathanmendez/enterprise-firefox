@@ -30,13 +30,13 @@ jobs:
             {"source": "enterprise-main", "target": "enterprise-release", "trigger_label": "uplift-to-release", "target_label": "branch:release"},
             {"source": "enterprise-beta", "target": "enterprise-release", "trigger_label": "uplift-to-release", "target_label": "branch:release"}
           ]'
-          
+
           # Filter based on PR base ref and labels
           BASE_REF='${{ github.event.pull_request.base.ref }}'
           LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
 
           # Use jq to filter entries where source matches base.ref AND trigger_label is in labels
-          FILTERED=$(echo "$ALL_ENTRIES" | jq --arg base "$BASE_REF" --argjson labels "$LABELS" '[.[] | select(.source == $base and (.trigger_label | IN($labels[])))]')
+          FILTERED=$(echo "$ALL_ENTRIES" | jq --arg base "$BASE_REF" --argjson labels "$LABELS" '[.[] | select(.source == $base and (.trigger_label as $tl | $labels | index($tl) != null))]')
           
           echo "matrix=$(echo $FILTERED | jq -c .)" >> $GITHUB_OUTPUT
 
