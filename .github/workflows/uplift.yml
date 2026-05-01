@@ -119,6 +119,7 @@ jobs:
           fi
 
           HAS_APPLIED_COMMITS=0
+          HAS_CONFLICTS=0
 
           for commit in $COMMITS; do
             SHORT=$(git rev-parse --short $commit)
@@ -147,6 +148,7 @@ jobs:
               git add -A
               git cherry-pick --continue
               echo "- [$SHORT]($LINK) $MSG (⚠️ conflict)" >> $SUMMARY_FILE
+              HAS_CONFLICTS=1
             else
               echo "- [$SHORT]($LINK) $MSG" >> $SUMMARY_FILE
             fi
@@ -164,6 +166,12 @@ jobs:
           git push origin $BRANCH
 
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "commits=$(echo $COMMITS | tr '\n' ' ')" >> $GITHUB_OUTPUT
+          if [ "$HAS_CONFLICTS" -eq 1 ]; then
+            echo "has_conflicts=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+          fi
 
           DELIM="GITHUB_OUTPUT_$(uuidgen)"
           echo "summary<<$DELIM" >> $GITHUB_OUTPUT
@@ -188,9 +196,21 @@ jobs:
 
           ## Commits
           ${{ steps.uplift.outputs.summary }}
-
-          ⚠️ Commits marked with conflicts require manual resolution.
           EOF
+
+          if [ "${{ steps.uplift.outputs.has_conflicts }}" = "true" ]; then
+            cat <<EOF >> pr_body.txt
+
+            ⚠️ Commits marked with conflicts require manual resolution, by rebasing locally to edit the commits or by recreating the branch. **DO NOT** fix up by adding an extra commit, only resolve conflicts directly on the cherry-pick commit(s).
+
+            To recreate this branch manually:
+            \`\`\`
+            git fetch enterprise-firefox ${{ matrix.target }}
+            git checkout -b ${{ steps.uplift.outputs.branch }} enterprise-firefox/${{ matrix.target }}
+            git cherry-pick ${{ steps.uplift.outputs.commits }}
+            \`\`\`
+            EOF
+          fi
 
           gh pr create \
             --base "${{ matrix.target }}" \
