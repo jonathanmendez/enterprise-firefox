@@ -222,7 +222,8 @@ jobs:
 
           gh pr edit "$PR_URL" --add-reviewer "mozilla/enterprise-firefox-engineering"
 
-          # Add original author if conflicts happened, since manual resolution is required
+          # If there are conflicts, add original author and mark PR as draft since manual resolution is required
           if [ "${{ steps.uplift.outputs.has_conflicts }}" = "true" ]; then
             gh pr edit "$PR_URL" --add-reviewer "${{ github.event.pull_request.user.login }}"
+            gh pr ready "$PR_URL" --undo
           fi
