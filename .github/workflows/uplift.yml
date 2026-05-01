@@ -191,7 +191,7 @@ jobs:
         run: |
           BRANCH="${{ steps.uplift.outputs.branch }}"
 
-          cat <<EOF > pr_body.txt
+          cat <<'EOF' > pr_body.txt
           Uplift from #${{ env.PR_NUMBER }}
 
           ## Commits
@@ -209,15 +209,15 @@ jobs:
           gh pr edit "$PR_URL" --add-reviewer "mozilla/enterprise-firefox-engineering"
 
           if [ "${{ steps.uplift.outputs.has_conflicts }}" = "true" ]; then
-            cat <<EOF >> comment_body.txt
+            cat <<'EOF' >> comment_body.txt
             ⚠️ Commits marked with conflicts require manual resolution, by rebasing locally to edit the commits or by recreating the branch. **DO NOT** fix up by adding an extra commit, only resolve conflicts directly on the cherry-pick commit(s).
 
             To recreate this branch manually:
-            \`\`\`
+            ```
             git fetch enterprise-firefox ${{ matrix.target }}
             git checkout -b ${{ steps.uplift.outputs.branch }} enterprise-firefox/${{ matrix.target }}
             git cherry-pick ${{ steps.uplift.outputs.commits }}
-            \`\`\`
+            ```
             EOF
 
             gh pr comment "$PR_URL" --body-file comment_body.txt
