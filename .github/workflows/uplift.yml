@@ -18,6 +18,7 @@ jobs:
   build-matrix:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    permissions: {}
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -59,7 +60,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -188,15 +189,17 @@ jobs:
         if: steps.uplift.outputs.branch != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT_SUMMARY: ${{ steps.uplift.outputs.summary }}
         run: |
           BRANCH="${{ steps.uplift.outputs.branch }}"
 
-          cat <<'EOF' > pr_body.txt
+          DELIM="PR_BODY_$(uuidgen)"
+          cat <<$DELIM > pr_body.txt
           Uplift from #${{ env.PR_NUMBER }}
 
           ## Commits
-          ${{ steps.uplift.outputs.summary }}
-          EOF
+          $COMMIT_SUMMARY
+          $DELIM
 
           PR_URL=$(gh pr create \
             --base "${{ matrix.target }}" \
