@@ -15,35 +15,42 @@ on:
     types: [closed]
 
 jobs:
-  uplift:
-    if: >
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == matrix.source &&
-      contains(github.event.pull_request.labels.*.name, matrix.trigger_label)
-
+  build-matrix:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          # Define all possible uplift paths
+          ALL_ENTRIES='[
+            {"source": "enterprise-main", "target": "enterprise-beta", "trigger_label": "uplift-to-beta", "target_label": "branch:beta"},
+            {"source": "enterprise-main", "target": "enterprise-release", "trigger_label": "uplift-to-release", "target_label": "branch:release"},
+            {"source": "enterprise-beta", "target": "enterprise-release", "trigger_label": "uplift-to-release", "target_label": "branch:release"}
+          ]'
+          
+          # Filter based on PR base ref and labels
+          BASE_REF='${{ github.event.pull_request.base.ref }}'
+          LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
 
+          # Use jq to filter entries where source matches base.ref AND trigger_label is in labels
+          FILTERED=$(echo "$ALL_ENTRIES" | jq --arg base "$BASE_REF" --argjson labels "$LABELS" '[.[] | select(.source == $base and (.trigger_label | IN($labels[])))]')
+          
+          echo "matrix=$(echo $FILTERED | jq -c .)" >> $GITHUB_OUTPUT
+
+  uplift:
+    needs: build-matrix
+    if: fromJson(needs.build-matrix.outputs.matrix).length > 0
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - source: enterprise-main
-            target: enterprise-beta
-            trigger_label: uplift-to-beta
-            target_label: branch:beta
-          - source: enterprise-main
-            target: enterprise-release
-            trigger_label: uplift-to-release
-            target_label: branch:release
-          - source: enterprise-beta
-            target: enterprise-release
-            trigger_label: uplift-to-release
-            target_label: branch:release
-
+        include: ${{ fromJson(needs.build-matrix.outputs.matrix) }}
     env:
       MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
