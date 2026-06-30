@@ -87,7 +87,7 @@ impl CrashReport<'_> {
                 })
             }
 
-            request = Some(http::RequestBuilder::MimePost { parts }.build(self.url)?);
+            request = Some(http::RequestBuilder::MimePost { parts, headers: &[] }.build(self.url)?);
         }
 
         let response = request.unwrap().send()?;
@@ -180,7 +180,10 @@ mod test {
                                     mime_type: None,
                                 });
                             }
-                            assert_eq!(request, &http::RequestBuilder::MimePost { parts });
+                            assert_eq!(
+                                request,
+                                &http::RequestBuilder::MimePost { parts, headers: &[] }
+                            );
 
                             Ok(Ok(vec![]))
                         }

@@ -1378,7 +1378,8 @@ fn background_task_network_backend() {
                             "value": platform_path("data_dir/pending/minidump.memory.json.gz"),
                         },
                     }
-                ]
+                ],
+                "headers": []
             })
             .to_string();
 
@@ -1537,7 +1538,8 @@ fn background_task_curl_fallback() {
                                 "value": platform_path("data_dir/pending/minidump.dmp"),
                             },
                         }
-                    ]
+                    ],
+                    "headers": []
                 })
                 .to_string();
 
