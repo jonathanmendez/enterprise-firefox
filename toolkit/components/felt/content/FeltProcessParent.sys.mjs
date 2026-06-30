@@ -16,6 +16,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "resource://gre/modules/enterprise/EnterpriseCommon.sys.mjs",
   FeltCommon: "chrome://felt/content/FeltCommon.sys.mjs",
   FeltStorage: "resource://gre/modules/enterprise/FeltStorage.sys.mjs",
+  EnterpriseCrashToken: "resource://gre/modules/EnterpriseCrashToken.sys.mjs",
 });
 
 if (lazy.isBuildAppBrowser()) {
@@ -38,6 +39,32 @@ const PROCESS_START_REASON = {
   RESTART: "restart",
   CRASH: "crash",
 };
+
+// Persist the Felt token to disk so out-of-process crash uploads (which run in
+// fresh processes without an in-memory token) can authenticate with the
+// console. Called from Felt UI, which holds the full access+refresh token.
+function persistEnterpriseCrashToken(access_token, refresh_token, expires_at) {
+  let consoleUrl = "";
+  try {
+    consoleUrl = Services.felt.getConsoleUrl();
+  } catch (e) {
+    // Console URL not initialized yet; persist without it.
+  }
+  lazy.EnterpriseCrashToken.write({
+    accessToken: access_token,
+    refreshToken: refresh_token,
+    expiresAt: expires_at,
+    consoleUrl,
+  }).catch(e => {
+    lazy.log.warn("Failed to persist enterprise crash token", e);
+  });
+}
+
+function clearEnterpriseCrashToken() {
+  lazy.EnterpriseCrashToken.clear().catch(e => {
+    lazy.log.warn("Failed to clear enterprise crash token", e);
+  });
+}
 
 export function queueURL(payload) {
   // If Firefox AND Felt are both ready, forward immediately
@@ -280,6 +307,11 @@ export class FeltProcessParent extends JSProcessActorParent {
                   refresh_token,
                   expires_at
                 );
+                persistEnterpriseCrashToken(
+                  access_token,
+                  refresh_token,
+                  expires_at
+                );
                 Services.felt.sendAccessToken();
               })
               .catch(error => {
@@ -302,6 +334,7 @@ export class FeltProcessParent extends JSProcessActorParent {
                 // At this point, we need to reauthenticate.
                 lazy.log.error("token refresh failed, reauthenticate", error);
                 Services.felt.clearTokens();
+                clearEnterpriseCrashToken();
                 gFeltProcessParentInstance.logoutReported = true;
                 gFeltProcessParentInstance.proc.exitPromise.then(_ => {
                   Services.cpmm.sendAsyncMessage(
@@ -753,6 +786,7 @@ export class FeltProcessParent extends JSProcessActorParent {
       .finally(() => {
         // clear token data on the FELT side, then shut Firefox down
         Services.felt.clearTokens();
+        clearEnterpriseCrashToken();
         Services.felt.shutdownFirefox();
         gFeltProcessParentInstance.proc.exitPromise.then(_ => {
           Services.cpmm.sendAsyncMessage("FeltParent:FirefoxLogoutExit", {
@@ -776,6 +810,7 @@ export class FeltProcessParent extends JSProcessActorParent {
           } = message.data;
           const expires_at = Math.floor(Date.now() / 1000) + Number(expires_in);
           Services.felt.setTokens(access_token, refresh_token, expires_at);
+          persistEnterpriseCrashToken(access_token, refresh_token, expires_at);
 
           // TODO: Bug 2003001 - Pass user info from Felt to Firefox to avoid network request on startup
           this.loggedInUserInfo =

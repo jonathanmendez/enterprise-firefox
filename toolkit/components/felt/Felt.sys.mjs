@@ -19,6 +19,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "resource://gre/modules/enterprise/EnterpriseCommon.sys.mjs",
   WebAuthnPromptHelper:
     "moz-src:///toolkit/modules/WebAuthnPromptHelper.sys.mjs",
+  EnterpriseCrashToken: "resource://gre/modules/EnterpriseCrashToken.sys.mjs",
 });
 
 if (lazy.isBuildAppBrowser()) {
@@ -269,6 +270,9 @@ export class Felt {
           })
           .finally(() => {
             Services.felt.clearTokens();
+            lazy.EnterpriseCrashToken.clear().catch(e => {
+              lazy.log.warn("Failed to clear enterprise crash token", e);
+            });
             // This is only useful for testing purpose when we need to exit the
             // browser cleanly but need to keep felt alive for some processing after
             if (!lazy.isBlockingShutdown()) {
