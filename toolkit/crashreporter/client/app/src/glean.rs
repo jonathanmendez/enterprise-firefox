@@ -102,6 +102,9 @@ impl InitOptions {
     }
 
     fn init_glean(self) -> anyhow::Result<crashping::InitGlean> {
+        // The crash reports data directory (before the glean subdirectory is
+        // appended), used to locate the persisted enterprise token.
+        let token_data_dir = self.data_dir.clone();
         let mut data_dir = if cfg!(mock) {
             // Use a (non-mocked) temp directory since glean won't access our mocked API.
             ::std::env::temp_dir().join("crashreporter-mock")
@@ -127,7 +130,8 @@ impl InitOptions {
                 os_version: None, // TODO: bug 2017277
             },
         );
-        init_glean.configuration.uploader = Some(Box::new(uploader::Uploader::new()));
+        init_glean.configuration.uploader =
+            Some(Box::new(uploader::Uploader::new(token_data_dir)));
         init_glean.configuration.upload_enabled = self.upload_enabled;
 
         if cfg!(mock) {
@@ -165,13 +169,18 @@ mod uploader {
 
     #[derive(Debug)]
     pub struct Uploader {
+        // The crash reports data directory, used to read the persisted
+        // enterprise token. Unused for non-enterprise builds.
+        #[cfg_attr(not(feature = "enterprise"), allow(dead_code))]
+        data_dir: ::std::path::PathBuf,
         #[cfg(mock)]
         mock_data: crate::std::mock::SharedMockData,
     }
 
     impl Uploader {
-        pub fn new() -> Self {
+        pub fn new(data_dir: ::std::path::PathBuf) -> Self {
             Uploader {
+                data_dir,
                 #[cfg(mock)]
                 mock_data: crate::std::mock::SharedMockData::new(),
             }
@@ -181,23 +190,45 @@ mod uploader {
     impl PingUploader for Uploader {
         fn upload(&self, upload_request: CapablePingUploadRequest) -> UploadResult {
             let upload_request = upload_request.capable(|cap| cap.is_empty()).unwrap();
-            let request_builder = http::RequestBuilder::Post {
-                body: upload_request.body.as_slice(),
-                headers: upload_request.headers.as_slice(),
-            };
 
-            let do_send = move || match request_builder.build(upload_request.url.as_ref()) {
-                Err(e) => {
-                    log::error!("failed to build request for glean ping: {e}");
-                    UploadResult::unrecoverable_failure()
-                }
-                Ok(request) => match request.send() {
-                    Err(e) => {
-                        log::error!("failed to send glean ping: {e:#}");
-                        UploadResult::recoverable_failure()
+            #[cfg(feature = "enterprise")]
+            let data_dir = self.data_dir.clone();
+
+            let do_send = move || {
+                // In Firefox Enterprise, crash pings go to the admin console
+                // and must carry the Felt bearer token (best-effort: the token
+                // is attached only if a valid one was persisted).
+                #[cfg(feature = "enterprise")]
+                let headers = {
+                    let mut headers = upload_request.headers.clone();
+                    if let Some(header) =
+                        crate::net::auth::enterprise_authorization_header(Some(data_dir.as_path()))
+                    {
+                        headers.push(header);
                     }
-                    Ok(_) => UploadResult::http_status(200),
-                },
+                    headers
+                };
+                #[cfg(not(feature = "enterprise"))]
+                let headers = &upload_request.headers;
+
+                let request_builder = http::RequestBuilder::Post {
+                    body: upload_request.body.as_slice(),
+                    headers: headers.as_slice(),
+                };
+
+                match request_builder.build(upload_request.url.as_ref()) {
+                    Err(e) => {
+                        log::error!("failed to build request for glean ping: {e}");
+                        UploadResult::unrecoverable_failure()
+                    }
+                    Ok(request) => match request.send() {
+                        Err(e) => {
+                            log::error!("failed to send glean ping: {e:#}");
+                            UploadResult::recoverable_failure()
+                        }
+                        Ok(_) => UploadResult::http_status(200),
+                    },
+                }
             };
 
             #[cfg(mock)]

@@ -200,12 +200,16 @@ Submitter.prototype = {
     let manager = Services.crashmanager;
     let submissionID = manager.generateSubmissionID();
 
-    this.sendRequest(serverURL, formData, promises, manager, submissionID).catch(
-      err => {
-        this.notifyStatus(FAILED, `failed to send crash report: ${err}`);
-        this.cleanup();
-      }
-    );
+    this.sendRequest(
+      serverURL,
+      formData,
+      promises,
+      manager,
+      submissionID
+    ).catch(err => {
+      this.notifyStatus(FAILED, `failed to send crash report: ${err}`);
+      this.cleanup();
+    });
     return true;
   },
 

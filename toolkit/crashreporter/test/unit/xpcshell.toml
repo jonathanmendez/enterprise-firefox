@@ -10,6 +10,8 @@ support-files = [
 ]
 tags = "os_integration"
 
+["test_EnterpriseCrashToken.js"]
+
 ["test_crash_AsyncShutdown.js"]
 skip-if = [
   "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1993829
