@@ -472,55 +472,73 @@ export const ConsoleClient = {
     // felt refresh promise exists, so do the actual refresh.
     this._feltRefreshPromise = (async () => {
       const refreshToken = Services.felt.getRefreshToken();
-      if (!refreshToken) {
-        const e = new ReauthRequiredError(
-          "No refresh token available",
-          "MISSING_REFRESH_TOKEN"
-        );
-        lazy.log.error(e);
-        throw e;
-      }
-
-      const url = await this.constructURI(this._paths.TOKEN);
-      // We let any errors that are thrown here bubble up, these should
-      // be lower level network errors, i.e. nothing on the HTTP level.
-      const res = await this._xhrFetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-        }),
-      });
-
-      // These are concrete HTTP errors that should trigger
-      // a full-blown re-authentication.
-      if (res.status === 401 || res.status === 403) {
-        throw new ReauthRequiredError(
-          "Invalid refresh token",
-          "INVALID_REFRESH_TOKEN",
-          { status: res.status }
-        );
-      }
-
-      // Throw an error if the response is not ok (i.e. not a 20x status code),
-      // and also neither a 401 or a 403 error (handled above).
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Token refresh failed: ${text}, Status: ${res.status}`);
-      }
-
-      const { access_token, refresh_token, expires_in } = await res.json();
-      const expires_at = Math.floor(Date.now() / 1000) + Number(expires_in);
-      return { access_token, refresh_token, expires_at };
+      const consoleUrl = (await this.consoleBaseURI).href;
+      return this._doTokenRefresh(consoleUrl, refreshToken);
     })().finally(() => {
       // In any case, clear the felt refresh promise so that a new one can be started.
       this._feltRefreshPromise = null;
     });
     return this._feltRefreshPromise;
+  },
+
+  /**
+   * Performs the raw `/sso/token` refresh request. Context-free: it depends
+   * only on the supplied console URL and refresh token, not on the Felt
+   * service, so it can be used outside the Felt UI process (e.g. from the
+   * crash reporter network background task).
+   *
+   * @param {string} consoleUrl - The console base URL.
+   * @param {string} refreshToken - The current refresh token.
+   * @throws {ReauthRequiredError | Error} If unable to refresh session
+   * @returns {Promise<{ access_token, refresh_token, expires_at }>}
+   */
+  async _doTokenRefresh(consoleUrl, refreshToken) {
+    if (!refreshToken) {
+      const e = new ReauthRequiredError(
+        "No refresh token available",
+        "MISSING_REFRESH_TOKEN"
+      );
+      lazy.log.error(e);
+      throw e;
+    }
+
+    const url = new URL(consoleUrl);
+    url.pathname = this._paths.TOKEN;
+
+    // We let any errors that are thrown here bubble up, these should
+    // be lower level network errors, i.e. nothing on the HTTP level.
+    const res = await this._xhrFetch(url.href, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
+    });
+
+    // These are concrete HTTP errors that should trigger
+    // a full-blown re-authentication.
+    if (res.status === 401 || res.status === 403) {
+      throw new ReauthRequiredError(
+        "Invalid refresh token",
+        "INVALID_REFRESH_TOKEN",
+        { status: res.status }
+      );
+    }
+
+    // Throw an error if the response is not ok (i.e. not a 20x status code),
+    // and also neither a 401 or a 403 error (handled above).
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Token refresh failed: ${text}, Status: ${res.status}`);
+    }
+
+    const { access_token, refresh_token, expires_in } = await res.json();
+    const expires_at = Math.floor(Date.now() / 1000) + Number(expires_in);
+    return { access_token, refresh_token, expires_at };
   },
 
   /**
