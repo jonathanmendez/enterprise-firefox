@@ -125,9 +125,7 @@ mod test {
 
     #[test]
     fn empty_access_token_yields_none() {
-        let header = run_with_token(Some(
-            r#"{"access_token":"","expires_at":99999999999}"#,
-        ));
+        let header = run_with_token(Some(r#"{"access_token":"","expires_at":99999999999}"#));
         assert!(header.is_none());
     }
 

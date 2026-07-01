@@ -10,7 +10,12 @@ const { OSKeyStoreTestUtils } = ChromeUtils.importESModule(
   "resource://testing-common/OSKeyStoreTestUtils.sys.mjs"
 );
 
-add_setup(function () {
+// `makeFakeAppDir` is provided globally by head_crashreporter.js.
+/* global makeFakeAppDir */
+
+add_setup(async function () {
+  do_get_profile();
+  await makeFakeAppDir();
   OSKeyStoreTestUtils.setup();
 });
 

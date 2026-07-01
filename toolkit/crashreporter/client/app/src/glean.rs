@@ -130,8 +130,7 @@ impl InitOptions {
                 os_version: None, // TODO: bug 2017277
             },
         );
-        init_glean.configuration.uploader =
-            Some(Box::new(uploader::Uploader::new(token_data_dir)));
+        init_glean.configuration.uploader = Some(Box::new(uploader::Uploader::new(token_data_dir)));
         init_glean.configuration.upload_enabled = self.upload_enabled;
 
         if cfg!(mock) {

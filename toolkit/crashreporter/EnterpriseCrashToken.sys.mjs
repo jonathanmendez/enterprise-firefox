@@ -28,13 +28,18 @@ export const EnterpriseCrashToken = {
    * Absolute path to the token file, co-located with the other crash data
    * under UAppData/Crash Reports (created with 0700 permissions).
    *
+   * Computed lazily so importing this module does not require UAppData to be
+   * available (e.g. in some test harnesses).
+   *
    * @type {string}
    */
-  TOKEN_FILE_PATH: PathUtils.join(
-    Services.dirsvc.get("UAppData", Ci.nsIFile).path,
-    "Crash Reports",
-    "enterprise-crash-token.json"
-  ),
+  get TOKEN_FILE_PATH() {
+    return PathUtils.join(
+      Services.dirsvc.get("UAppData", Ci.nsIFile).path,
+      "Crash Reports",
+      "enterprise-crash-token.json"
+    );
+  },
 
   /**
    * Persist the current tokens, encrypting the refresh token at rest.

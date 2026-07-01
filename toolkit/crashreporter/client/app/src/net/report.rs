@@ -226,10 +226,9 @@ mod test {
                         checked.inc();
                         match request {
                             http::RequestBuilder::MimePost { headers, .. } => {
-                                assert_eq!(
-                                    headers,
-                                    &[("Authorization".to_owned(), "Bearer abc".to_owned())]
-                                );
+                                assert_eq!(headers.len(), 1);
+                                assert_eq!(headers[0].0, "Authorization");
+                                assert_eq!(headers[0].1, "Bearer abc");
                             }
                             _ => panic!("expected a MimePost request"),
                         }
