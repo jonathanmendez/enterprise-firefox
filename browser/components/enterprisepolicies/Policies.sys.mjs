@@ -910,39 +910,12 @@ export var Policies = {
     onBeforeAddons(manager, param) {
       // For security reasons, all of the Content Analysis related prefs should be locked in
       // this method, even if the values aren't specified in Enterprise Policies.
+      // The prefs shared with the built-in DataLossPrevention policy are set and locked
+      // in reconcileContentAnalysis so the two policies arbitrate consistently.
       lazy.PoliciesUtils.setPrefIfPresentAndLock(
         param,
         "PipePathName",
         "browser.contentanalysis.pipe_path_name"
-      );
-      if ("AgentTimeout" in param) {
-        if (!Number.isInteger(param.AgentTimeout)) {
-          lazy.log.error(
-            `Non-integer value for AgentTimeout: ${param.AgentTimeout}`
-          );
-        } else {
-          lazy.PoliciesUtils.setAndLockPref(
-            "browser.contentanalysis.agent_timeout",
-            param.AgentTimeout
-          );
-        }
-      } else {
-        Services.prefs.lockPref("browser.contentanalysis.agent_timeout");
-      }
-      lazy.PoliciesUtils.setPrefIfPresentAndLock(
-        param,
-        "AllowUrlRegexList",
-        "browser.contentanalysis.allow_url_regex_list"
-      );
-      lazy.PoliciesUtils.setPrefIfPresentAndLock(
-        param,
-        "DenyUrlRegexList",
-        "browser.contentanalysis.deny_url_regex_list"
-      );
-      lazy.PoliciesUtils.setPrefIfPresentAndLock(
-        param,
-        "AgentName",
-        "browser.contentanalysis.agent_name"
       );
       lazy.PoliciesUtils.setPrefIfPresentAndLock(
         param,
@@ -954,125 +927,30 @@ export var Policies = {
         "MaxConnectionsCount",
         "browser.contentanalysis.max_connections"
       );
-      let resultPrefs = [
-        ["DefaultResult", "default_result"],
-        ["TimeoutResult", "timeout_result"],
-      ];
-      for (let pref of resultPrefs) {
-        if (pref[0] in param) {
-          if (
-            !Number.isInteger(param[pref[0]]) ||
-            param[pref[0]] < 0 ||
-            param[pref[0]] > 2
-          ) {
-            lazy.log.error(
-              `Non-integer or out of range value for ${pref[0]}: ${param[pref[0]]}`
-            );
-            Services.prefs.lockPref(`browser.contentanalysis.${pref[1]}`);
-          } else {
-            lazy.PoliciesUtils.setAndLockPref(
-              `browser.contentanalysis.${pref[1]}`,
-              param[pref[0]]
-            );
-          }
-        } else {
-          Services.prefs.lockPref(`browser.contentanalysis.${pref[1]}`);
-        }
-      }
-      let boolPrefs = [
-        ["IsPerUser", "is_per_user"],
-        ["ShowBlockedResult", "show_blocked_result"],
-        ["BypassForSameTabOperations", "bypass_for_same_tab_operations"],
-      ];
-      for (let pref of boolPrefs) {
-        if (pref[0] in param) {
-          lazy.PoliciesUtils.setAndLockPref(
-            `browser.contentanalysis.${pref[1]}`,
-            !!param[pref[0]]
-          );
-        } else {
-          Services.prefs.lockPref(`browser.contentanalysis.${pref[1]}`);
-        }
-      }
-      let interceptionPointPrefs = [
-        ["Clipboard", "clipboard"],
-        ["Download", "download"],
-        ["DragAndDrop", "drag_and_drop"],
-        ["FileUpload", "file_upload"],
-        ["Print", "print"],
-      ];
-      if ("InterceptionPoints" in param) {
-        for (let pref of interceptionPointPrefs) {
-          let value = true;
-          if (pref[0] in param.InterceptionPoints) {
-            if ("Enabled" in param.InterceptionPoints[pref[0]]) {
-              value = !!param.InterceptionPoints[pref[0]].Enabled;
-            }
-          }
-          lazy.PoliciesUtils.setAndLockPref(
-            `browser.contentanalysis.interception_point.${pref[1]}.enabled`,
-            value
-          );
-        }
-      } else {
-        for (let pref of interceptionPointPrefs) {
-          Services.prefs.lockPref(
-            `browser.contentanalysis.interception_point.${pref[1]}.enabled`
-          );
-        }
-      }
-      let plainTextOnlyPrefs = [
-        ["Clipboard", "clipboard"],
-        ["DragAndDrop", "drag_and_drop"],
-      ];
-      if ("InterceptionPoints" in param) {
-        for (let pref of plainTextOnlyPrefs) {
-          // Need to set and lock this value even if the enterprise
-          // policy isn't set so users can't change it
-          let value = true;
-          if ("InterceptionPoints" in param) {
-            if (pref[0] in param.InterceptionPoints) {
-              if ("PlainTextOnly" in param.InterceptionPoints[pref[0]]) {
-                value = !!param.InterceptionPoints[pref[0]].PlainTextOnly;
-              }
-            }
-          }
-          lazy.PoliciesUtils.setAndLockPref(
-            `browser.contentanalysis.interception_point.${pref[1]}.plain_text_only`,
-            value
-          );
-        }
-      } else {
-        for (let pref of plainTextOnlyPrefs) {
-          Services.prefs.lockPref(
-            `browser.contentanalysis.interception_point.${pref[1]}.plain_text_only`
-          );
-        }
-      }
-      if ("Enabled" in param) {
-        let enabled = !!param.Enabled;
+      if ("IsPerUser" in param) {
         lazy.PoliciesUtils.setAndLockPref(
-          "browser.contentanalysis.enabled",
-          enabled
+          "browser.contentanalysis.is_per_user",
+          !!param.IsPerUser
         );
-        let ca = Cc["@mozilla.org/contentanalysis;1"].getService(
-          Ci.nsIContentAnalysis
-        );
-        ca.isSetByEnterprisePolicy = true;
       } else {
-        // Probably not strictly necessary, but let's lock everything
-        // to be consistent.
-        Services.prefs.lockPref("browser.contentanalysis.enabled");
+        Services.prefs.lockPref("browser.contentanalysis.is_per_user");
       }
-      // This will eventually be set by policy.
-      lazy.PoliciesUtils.setAndLockPref(
-        "browser.contentanalysis.use_wasm_backend",
-        false
-      );
-      lazy.PoliciesUtils.setAndLockPref(
-        "browser.contentanalysis.wasm_module_extension_require_signature",
-        true
-      );
+      reconcileContentAnalysis(manager);
+    },
+    onRemove(manager) {
+      // Release the external-agent-specific prefs; the shared and common-logic
+      // prefs are handled by reconcileContentAnalysis.
+      for (let suffix of [
+        "pipe_path_name",
+        "client_signature",
+        "max_connections",
+        "is_per_user",
+      ]) {
+        lazy.PoliciesUtils.unsetAndUnlockPref(
+          `browser.contentanalysis.${suffix}`
+        );
+      }
+      reconcileContentAnalysis(manager);
     },
   },
 
@@ -1303,6 +1181,18 @@ export var Policies = {
       } catch (e) {
         // nsICrashReporter is unavailable in builds without the crash reporter.
       }
+    },
+  },
+
+  DataLossPrevention: {
+    onBeforeAddons(manager) {
+      // Built-in DLP drives the same Content Analysis service as the external
+      // ContentAnalysis policy; reconcileContentAnalysis owns the shared prefs
+      // and applies the precedence between them.
+      reconcileContentAnalysis(manager);
+    },
+    onRemove(manager) {
+      reconcileContentAnalysis(manager);
     },
   },
 
@@ -4361,6 +4251,302 @@ export var Policies = {
     },
   },
 };
+
+// ===========================================================================
+// Content Analysis / built-in DLP backend arbitration
+// ===========================================================================
+//
+// The ContentAnalysis (external agent) and DataLossPrevention (built-in WASM)
+// policies drive the same single-backend Content Analysis service, so a single
+// arbiter owns every pref they share. reconcileContentAnalysis runs from all
+// activation/removal callbacks of both policies: reading the full active set
+// of policies here yields the right result no matter which callbacks run.
+// The C++ service reselects its backend on EnterprisePolicies:PolicyUpdatesApplied,
+// after these prefs have settled.
+
+// DLP Action -> the interception-point pref suffixes it needs enabled. Built-in
+// DLP derives which hooks to turn on from the union of its enabled rules'
+// Actions.
+const DLP_ACTION_INTERCEPTION_POINTS = {
+  TextPaste: ["clipboard", "drag_and_drop"],
+  TextCopy: ["clipboard", "drag_and_drop"],
+  FileUpload: ["file_upload", "drag_and_drop"],
+  FileDownload: ["download"],
+  Print: ["print"],
+};
+
+// DataLossPrevention FallbackResult -> the ContentAnalysis numeric result
+// convention (0 = block/deny, 1 = warn, 2 = allow).
+const DLP_FALLBACK_RESULT = { block: 0, warn: 1, allow: 2 };
+
+// ContentAnalysis InterceptionPoints member name -> pref suffix.
+const CA_INTERCEPTION_POINTS = [
+  ["Clipboard", "clipboard"],
+  ["Download", "download"],
+  ["DragAndDrop", "drag_and_drop"],
+  ["FileUpload", "file_upload"],
+  ["Print", "print"],
+];
+const CA_PLAIN_TEXT_POINTS = [
+  ["Clipboard", "clipboard"],
+  ["DragAndDrop", "drag_and_drop"],
+];
+
+// Build a browser.contentanalysis.* pref name.
+function caPrefName(suffix) {
+  return `browser.contentanalysis.${suffix}`;
+}
+
+// Set and lock the Content Analysis prefs for an active ContentAnalysis policy.
+// Used for the external agent and for an explicitly-disabled ContentAnalysis policy.
+function applyContentAnalysisConfig(caParam) {
+  for (let [key, suffix] of [
+    ["DefaultResult", "default_result"],
+    ["TimeoutResult", "timeout_result"],
+  ]) {
+    if (key in caParam) {
+      let value = caParam[key];
+      if (!Number.isInteger(value) || value < 0 || value > 2) {
+        lazy.log.error(
+          `Non-integer or out of range value for ${key}: ${value}`
+        );
+        Services.prefs.lockPref(caPrefName(suffix));
+      } else {
+        lazy.PoliciesUtils.setAndLockPref(caPrefName(suffix), value);
+      }
+    } else {
+      Services.prefs.lockPref(caPrefName(suffix));
+    }
+  }
+  lazy.PoliciesUtils.setPrefIfPresentAndLock(
+    caParam,
+    "AllowUrlRegexList",
+    caPrefName("allow_url_regex_list")
+  );
+  lazy.PoliciesUtils.setPrefIfPresentAndLock(
+    caParam,
+    "DenyUrlRegexList",
+    caPrefName("deny_url_regex_list")
+  );
+  lazy.PoliciesUtils.setPrefIfPresentAndLock(
+    caParam,
+    "AgentName",
+    caPrefName("agent_name")
+  );
+  if ("AgentTimeout" in caParam) {
+    if (!Number.isInteger(caParam.AgentTimeout)) {
+      lazy.log.error(
+        `Non-integer value for AgentTimeout: ${caParam.AgentTimeout}`
+      );
+    } else {
+      lazy.PoliciesUtils.setAndLockPref(
+        caPrefName("agent_timeout"),
+        caParam.AgentTimeout
+      );
+    }
+  } else {
+    Services.prefs.lockPref(caPrefName("agent_timeout"));
+  }
+  for (let [key, suffix] of [
+    ["ShowBlockedResult", "show_blocked_result"],
+    ["BypassForSameTabOperations", "bypass_for_same_tab_operations"],
+  ]) {
+    if (key in caParam) {
+      lazy.PoliciesUtils.setAndLockPref(caPrefName(suffix), !!caParam[key]);
+    } else {
+      Services.prefs.lockPref(caPrefName(suffix));
+    }
+  }
+  if ("InterceptionPoints" in caParam) {
+    for (let [key, suffix] of CA_INTERCEPTION_POINTS) {
+      let value = true;
+      let point = caParam.InterceptionPoints[key];
+      if (point && "Enabled" in point) {
+        value = !!point.Enabled;
+      }
+      lazy.PoliciesUtils.setAndLockPref(
+        caPrefName(`interception_point.${suffix}.enabled`),
+        value
+      );
+    }
+    for (let [key, suffix] of CA_PLAIN_TEXT_POINTS) {
+      let value = true;
+      let point = caParam.InterceptionPoints[key];
+      if (point && "PlainTextOnly" in point) {
+        value = !!point.PlainTextOnly;
+      }
+      lazy.PoliciesUtils.setAndLockPref(
+        caPrefName(`interception_point.${suffix}.plain_text_only`),
+        value
+      );
+    }
+  } else {
+    for (let [, suffix] of CA_INTERCEPTION_POINTS) {
+      Services.prefs.lockPref(
+        caPrefName(`interception_point.${suffix}.enabled`)
+      );
+    }
+    for (let [, suffix] of CA_PLAIN_TEXT_POINTS) {
+      Services.prefs.lockPref(
+        caPrefName(`interception_point.${suffix}.plain_text_only`)
+      );
+    }
+  }
+}
+
+// Ensure the Content Analysis service exists (so it can observe policy updates)
+// and mark it as controlled by enterprise policy.
+function markContentAnalysisPolicyControlled() {
+  let ca = Cc["@mozilla.org/contentanalysis;1"].getService(
+    Ci.nsIContentAnalysis
+  );
+  ca.isSetByEnterprisePolicy = true;
+}
+
+// Apply the shared Content Analysis prefs for the external-agent provider.
+function applyExternalContentAnalysis(caParam) {
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("enabled"), true);
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("use_wasm_backend"), false);
+  lazy.PoliciesUtils.setAndLockPref(
+    caPrefName("wasm_module_extension_require_signature"),
+    true
+  );
+  applyContentAnalysisConfig(caParam);
+  lazy.PoliciesUtils.unsetAndUnlockPref(caPrefName("dlp_rules"));
+  markContentAnalysisPolicyControlled();
+}
+
+// Apply the shared Content Analysis prefs for the built-in DLP provider.
+function applyBuiltinDlp(dlpParam) {
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("enabled"), true);
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("use_wasm_backend"), true);
+  lazy.PoliciesUtils.setAndLockPref(
+    caPrefName("wasm_module_extension_require_signature"),
+    true
+  );
+
+  // Common (non-backend) Content Analysis logic reads these; give them explicit
+  // built-in values so a disabled-but-present ContentAnalysis policy (or a
+  // just-removed external one) can't shape built-in DLP. Rules handle allow/deny
+  // by domain, so the URL filter lists are empty; the request timeout stays
+  // generous (the in-process module completes quickly); blocked results are
+  // shown; and same-tab operations are analyzed like any other.
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("allow_url_regex_list"), "");
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("deny_url_regex_list"), "");
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("agent_timeout"), 300);
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("show_blocked_result"), true);
+  lazy.PoliciesUtils.setAndLockPref(
+    caPrefName("bypass_for_same_tab_operations"),
+    false
+  );
+  lazy.PoliciesUtils.setAndLockPref(
+    caPrefName("agent_name"),
+    "Firefox Enterprise DLP Engine"
+  );
+
+  // Derive interception points from the union of enabled rules' Actions. Leave
+  // plain-text-only off so file operations are still analyzed (per-rule
+  // PlainTextOnly is a future refinement).
+  let rules = Array.isArray(dlpParam.Rules) ? dlpParam.Rules : [];
+  let points = new Set();
+  for (let rule of rules) {
+    if (rule.Enabled !== true) {
+      continue;
+    }
+    for (let action of rule.Actions ?? []) {
+      for (let suffix of DLP_ACTION_INTERCEPTION_POINTS[action] ?? []) {
+        points.add(suffix);
+      }
+    }
+  }
+  for (let [, suffix] of CA_INTERCEPTION_POINTS) {
+    lazy.PoliciesUtils.setAndLockPref(
+      caPrefName(`interception_point.${suffix}.enabled`),
+      points.has(suffix)
+    );
+  }
+  for (let [, suffix] of CA_PLAIN_TEXT_POINTS) {
+    lazy.PoliciesUtils.setAndLockPref(
+      caPrefName(`interception_point.${suffix}.plain_text_only`),
+      false
+    );
+  }
+
+  // Map FallbackResult to the ContentAnalysis numeric result and hand the rules
+  // to the WASM backend via the pref it reads.
+  let fallback = DLP_FALLBACK_RESULT[dlpParam.FallbackResult ?? "block"] ?? 0;
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("default_result"), fallback);
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("timeout_result"), fallback);
+  lazy.PoliciesUtils.setAndLockPref(
+    caPrefName("dlp_rules"),
+    JSON.stringify({ DLPRules: { Rules: rules } })
+  );
+
+  markContentAnalysisPolicyControlled();
+}
+
+// Turn both providers off. A still-present (disabled) ContentAnalysis policy
+// keeps its config locked with the service disabled; when neither policy is
+// present the shared prefs are released entirely so the service shuts down.
+function disableContentAnalysis(caParam) {
+  if (!caParam) {
+    for (let suffix of [
+      "enabled",
+      "use_wasm_backend",
+      "wasm_module_extension_require_signature",
+      "default_result",
+      "timeout_result",
+      "dlp_rules",
+      "allow_url_regex_list",
+      "deny_url_regex_list",
+      "agent_timeout",
+      "show_blocked_result",
+      "bypass_for_same_tab_operations",
+      "agent_name",
+    ]) {
+      lazy.PoliciesUtils.unsetAndUnlockPref(caPrefName(suffix));
+    }
+    for (let [, suffix] of CA_INTERCEPTION_POINTS) {
+      lazy.PoliciesUtils.unsetAndUnlockPref(
+        caPrefName(`interception_point.${suffix}.enabled`)
+      );
+    }
+    for (let [, suffix] of CA_PLAIN_TEXT_POINTS) {
+      lazy.PoliciesUtils.unsetAndUnlockPref(
+        caPrefName(`interception_point.${suffix}.plain_text_only`)
+      );
+    }
+    return;
+  }
+
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("enabled"), false);
+  lazy.PoliciesUtils.setAndLockPref(caPrefName("use_wasm_backend"), false);
+  lazy.PoliciesUtils.setAndLockPref(
+    caPrefName("wasm_module_extension_require_signature"),
+    true
+  );
+  applyContentAnalysisConfig(caParam);
+  lazy.PoliciesUtils.unsetAndUnlockPref(caPrefName("dlp_rules"));
+  if ("Enabled" in caParam) {
+    markContentAnalysisPolicyControlled();
+  }
+}
+
+function reconcileContentAnalysis(manager) {
+  let active = manager.getActivePolicies() ?? {};
+  let caParam = active.ContentAnalysis;
+  let dlpParam = active.DataLossPrevention;
+
+  // The external agent is authoritative only when it is actually enabled; a
+  // ContentAnalysis block that does not enable an agent doesn't suppress DLP.
+  if (caParam?.Enabled === true) {
+    applyExternalContentAnalysis(caParam);
+  } else if (dlpParam) {
+    applyBuiltinDlp(dlpParam);
+  } else {
+    disableContentAnalysis(caParam);
+  }
+}
 
 if (!AppConstants.MOZ_ENTERPRISE) {
   delete Policies.Sync;

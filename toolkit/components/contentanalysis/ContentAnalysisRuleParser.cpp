@@ -58,6 +58,8 @@ bool ActionToAnalysisType(const nsAString& aAction, uint32_t* aOut) {
     *aOut = static_cast<uint32_t>(AnalysisType::eFileAttached);
   } else if (aAction.LowerCaseEqualsLiteral("textpaste")) {
     *aOut = static_cast<uint32_t>(AnalysisType::eBulkDataEntry);
+  } else if (aAction.LowerCaseEqualsLiteral("textcopy")) {
+    *aOut = static_cast<uint32_t>(AnalysisType::eDataCopied);
   } else if (aAction.LowerCaseEqualsLiteral("print")) {
     *aOut = static_cast<uint32_t>(AnalysisType::ePrint);
   } else {
