@@ -35,6 +35,9 @@ pub struct CrashReport<'a> {
     pub dump_file: &'a Path,
     pub memory_file: Option<&'a Path>,
     pub url: &'a str,
+    /// Extra HTTP headers (e.g. an enterprise `Authorization` header). Empty
+    /// for non-enterprise uploads.
+    pub auth_headers: Vec<(String, String)>,
 }
 
 impl CrashReport<'_> {
@@ -87,7 +90,13 @@ impl CrashReport<'_> {
                 })
             }
 
-            request = Some(http::RequestBuilder::MimePost { parts }.build(self.url)?);
+            request = Some(
+                http::RequestBuilder::MimePost {
+                    parts,
+                    headers: self.auth_headers.as_slice(),
+                }
+                .build(self.url)?,
+            );
         }
 
         let response = request.unwrap().send()?;
@@ -146,6 +155,7 @@ mod test {
                 dump_file: Path::new("minidump.dmp"),
                 memory_file,
                 url: "reports.example.com".as_ref(),
+                auth_headers: Vec::new(),
             };
 
             let checked = crate::test::Counter::new();
@@ -180,7 +190,10 @@ mod test {
                                     mime_type: None,
                                 });
                             }
-                            assert_eq!(request, &http::RequestBuilder::MimePost { parts });
+                            assert_eq!(
+                                request,
+                                &http::RequestBuilder::MimePost { parts, headers: &[] }
+                            );
 
                             Ok(Ok(vec![]))
                         }
@@ -193,12 +206,49 @@ mod test {
     }
 
     #[test]
+    fn report_auth_headers() {
+        let report = CrashReport {
+            extra: &serde_json::json! {{}},
+            dump_file: Path::new("minidump.dmp"),
+            memory_file: None,
+            url: "reports.example.com".as_ref(),
+            auth_headers: vec![("Authorization".to_owned(), "Bearer abc".to_owned())],
+        };
+
+        let checked = crate::test::Counter::new();
+
+        mock::builder()
+            .set(
+                http::MockHttp,
+                Box::new(cc!(
+                    (checked)
+                    move |request, _url| {
+                        checked.inc();
+                        match request {
+                            http::RequestBuilder::MimePost { headers, .. } => {
+                                assert_eq!(headers.len(), 1);
+                                assert_eq!(headers[0].0, "Authorization");
+                                assert_eq!(headers[0].1, "Bearer abc");
+                            }
+                            _ => panic!("expected a MimePost request"),
+                        }
+                        Ok(Ok(vec![]))
+                    }
+                )),
+            )
+            .run(|| report.send().unwrap());
+
+        checked.assert_one();
+    }
+
+    #[test]
     fn report_response() {
         let report = CrashReport {
             extra: &serde_json::json! {{}},
             dump_file: Path::new("minidump.dmp"),
             memory_file: None,
             url: "reports.example.com".as_ref(),
+            auth_headers: Vec::new(),
         };
 
         mock::builder()

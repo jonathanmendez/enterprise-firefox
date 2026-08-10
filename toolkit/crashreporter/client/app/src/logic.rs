@@ -645,11 +645,16 @@ impl ReportCrash {
 
         // Send the report to the server.
         let memory_file = self.config.memory_file();
+        #[cfg(feature = "enterprise")]
+        let auth_headers = net::auth::enterprise_authorization_headers();
+        #[cfg(not(feature = "enterprise"))]
+        let auth_headers = Vec::new();
         let report = net::report::CrashReport {
             extra: &extra,
             dump_file: self.config.dump_file(),
             memory_file: memory_file.as_deref(),
             url,
+            auth_headers,
         };
 
         let report_response = async_scoped_thread(|| report.send())

@@ -108,7 +108,7 @@ std::mock::mocked_static! {
 
 /*
  * IMPORTANT! Keep the serialized JSON format for RequestBuilder compatible with
- * toolkit/crashreporter/networking/BackgroundTask_crashNetwork.sys.mjs
+ * toolkit/crashreporter/networking/BackgroundTask_crashreporterNetworkBackend.sys.mjs
  */
 
 /// Types of requests that can be created.
@@ -116,7 +116,10 @@ std::mock::mocked_static! {
 #[serde(tag = "type")]
 pub enum RequestBuilder<'a> {
     /// Send a POST with multiple mime parts.
-    MimePost { parts: Vec<MimePart<'a>> },
+    MimePost {
+        parts: Vec<MimePart<'a>>,
+        headers: &'a [(String, String)],
+    },
     /// Send a POST.
     Post {
         body: &'a [u8],
@@ -266,7 +269,10 @@ impl<'a> RequestBuilder<'a> {
         cmd.args(["--user-agent", user_agent()]);
 
         match self {
-            Self::MimePost { parts } => {
+            Self::MimePost { parts, headers } => {
+                for (k, v) in headers.iter() {
+                    cmd.args(["--header", &format!("{k}: {v}")]);
+                }
                 for part in parts {
                     part.curl_command_args(&mut cmd, &mut stdin)?;
                 }
@@ -301,7 +307,15 @@ impl<'a> RequestBuilder<'a> {
         easy.set_max_redirs(30)?;
 
         match self {
-            Self::MimePost { parts } => {
+            Self::MimePost { parts, headers } => {
+                if !headers.is_empty() {
+                    let mut header_list = easy.slist();
+                    for (k, v) in headers.iter() {
+                        header_list.append(&format!("{k}: {v}"))?;
+                    }
+                    easy.set_headers(header_list)?;
+                }
+
                 let mut mime = easy.mime()?;
 
                 for part in parts {
