@@ -808,12 +808,30 @@ export const ConsoleClient = {
       Services.obs.addObserver(this, "felt-firefox-access-token-refreshed");
       Services.obs.addObserver(this, "felt-firefox-shutdown");
 
+      // Seed the crash reporter with any token already available at startup.
+      this._syncCrashReporterAuthToken();
+
       this.consoleBaseURI.then(
         ({ hostname }) => lazy.ConsoleProxyBypassFilter.register(hostname),
         e => lazy.log.error("Failed to register console proxy bypass:", e)
       );
     }
     return this;
+  },
+
+  /**
+   * Hand the current access token to the crash reporter so it can authenticate
+   * crash report and crash ping uploads with the console.
+   * Called on every token update in the browser process.
+   */
+  _syncCrashReporterAuthToken() {
+    try {
+      Services.appinfo.setAuthToken(
+        Services.felt.getAccessTokenIfValid() || ""
+      );
+    } catch (e) {
+      lazy.log.warn("Failed to sync crash reporter auth token", e);
+    }
   },
 
   observe(_, topic) {
@@ -840,6 +858,8 @@ export const ConsoleClient = {
         this._refreshResolve?.();
         // The `finally()` block of our promise chain will
         // reset/nullify the promise.
+        // Keep the crash reporter's inherited token in sync.
+        this._syncCrashReporterAuthToken();
         break;
       }
       case "nsPref:changed": {

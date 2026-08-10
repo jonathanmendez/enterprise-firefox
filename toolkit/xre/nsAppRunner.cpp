@@ -1855,6 +1855,11 @@ nsXULAppInfo::SetServerURL(nsIURL* aServerURL) {
 }
 
 NS_IMETHODIMP
+nsXULAppInfo::SetAuthToken(const nsACString& aToken) {
+  return CrashReporter::SetAuthToken(aToken);
+}
+
+NS_IMETHODIMP
 nsXULAppInfo::GetMinidumpPath(nsIFile** aMinidumpPath) {
   if (!CrashReporter::GetEnabled()) {
     return NS_ERROR_NOT_INITIALIZED;
