@@ -2,6 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+const lazy = {};
+
+ChromeUtils.defineESModuleGetters(lazy, {
+  ConsoleClient: "resource://gre/modules/enterprise/ConsoleClient.sys.mjs",
+});
+
 const SUCCESS = "success";
 const FAILED = "failed";
 const SUBMITTING = "submitting";
@@ -139,9 +145,6 @@ Submitter.prototype = {
       serverURL = envOverride;
     }
 
-    let xhr = new XMLHttpRequest();
-    xhr.open("POST", serverURL, true);
-
     let formData = new FormData();
 
     // tell the server not to throttle this if requested
@@ -197,80 +200,132 @@ Submitter.prototype = {
     let manager = Services.crashmanager;
     let submissionID = manager.generateSubmissionID();
 
-    xhr.addEventListener("readystatechange", () => {
-      if (xhr.readyState == 4) {
-        let ret =
-          xhr.status === 200 ? this.parseResponse(xhr.responseText) : {};
-        let failmsg;
-        if (xhr.status !== 200) {
-          const xhrStatus = code => {
-            switch (code) {
-              case 400:
-                return xhr.responseText;
-
-              case 413:
-                return "Discarded=post_body_too_large";
-
-              default:
-                return "Discarded=unknown_error";
-            }
-          };
-          let err = xhrStatus(xhr.status);
-          if (err.length && err.startsWith("Discarded=")) {
-            // Place the error code after, otherwise JS will complain we start
-            // with a number when dealing with the telemetry value on JS side
-            const errMsg = `${err.split("Discarded=")[1]}_${xhr.status}`;
-            Glean.crashSubmission.collectorErrors[errMsg].add();
-            failmsg = `received bad response: ${xhr.status} ${err}`;
-          }
-          if (xhr.status === 0) {
-            Glean.crashSubmission.channelStatus[xhr.channel.status].add();
-          }
-        }
-        let submitted = !!ret.CrashID;
-        let p = Promise.resolve();
-
-        if (this.recordSubmission) {
-          let result = submitted
-            ? manager.SUBMISSION_RESULT_OK
-            : manager.SUBMISSION_RESULT_FAILED;
-          p = manager.addSubmissionResult(
-            this.id,
-            submissionID,
-            new Date(),
-            result
-          );
-          if (submitted) {
-            manager.setRemoteCrashID(this.id, ret.CrashID);
-          }
-        }
-
-        p.then(() => {
-          if (submitted) {
-            this.submitSuccess(ret);
-          } else {
-            this.notifyStatus(
-              FAILED,
-              failmsg || "did not receive a crash ID in server response"
-            );
-            this.cleanup();
-          }
-        });
-      }
-    });
-
-    let p = Promise.all(promises);
-    let id = this.id;
-
-    if (this.recordSubmission) {
-      p = p.then(() => {
-        return manager.addSubmissionAttempt(id, submissionID, new Date());
-      });
-    }
-    p.then(() => {
-      xhr.send(formData);
+    this.sendRequest(
+      serverURL,
+      formData,
+      promises,
+      manager,
+      submissionID
+    ).catch(err => {
+      this.notifyStatus(FAILED, `failed to send crash report: ${err}`);
+      this.cleanup();
     });
     return true;
+  },
+
+  // In Firefox Enterprise crash reports are uploaded to the admin console,
+  // which requires the same Felt bearer token used for other console
+  // communication. Returns the access token, or null for non-enterprise
+  // builds (where uploads remain unauthenticated).
+  async getAuthToken() {
+    if (!Services.felt?.isFeltBrowser?.()) {
+      return null;
+    }
+    return lazy.ConsoleClient.getAccessToken();
+  },
+
+  // Force a token refresh, then return the new access token. Used to retry a
+  // submission that was rejected with a 401/403.
+  async refreshAuthToken() {
+    if (!Services.felt?.isFeltBrowser?.()) {
+      return null;
+    }
+    await lazy.ConsoleClient._refreshSession();
+    return lazy.ConsoleClient.getAccessToken();
+  },
+
+  // Build and send a single XHR, resolving with it once it completes.
+  sendOnce(serverURL, formData, authToken) {
+    return new Promise(resolve => {
+      let xhr = new XMLHttpRequest();
+      xhr.open("POST", serverURL, true);
+      if (authToken) {
+        xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+      }
+      xhr.addEventListener("readystatechange", () => {
+        if (xhr.readyState == 4) {
+          resolve(xhr);
+        }
+      });
+      xhr.send(formData);
+    });
+  },
+
+  async sendRequest(serverURL, formData, promises, manager, submissionID) {
+    await Promise.all(promises);
+
+    if (this.recordSubmission) {
+      await manager.addSubmissionAttempt(this.id, submissionID, new Date());
+    }
+
+    let authToken = await this.getAuthToken();
+    let xhr = await this.sendOnce(serverURL, formData, authToken);
+
+    // If the console rejected the token, refresh it once and retry.
+    if (authToken && (xhr.status === 401 || xhr.status === 403)) {
+      let refreshed = await this.refreshAuthToken();
+      if (refreshed) {
+        xhr = await this.sendOnce(serverURL, formData, refreshed);
+      }
+    }
+
+    await this.handleResponse(xhr, manager, submissionID);
+  },
+
+  async handleResponse(xhr, manager, submissionID) {
+    let ret = xhr.status === 200 ? this.parseResponse(xhr.responseText) : {};
+    let failmsg;
+    if (xhr.status !== 200) {
+      const xhrStatus = code => {
+        switch (code) {
+          case 400:
+            return xhr.responseText;
+
+          case 413:
+            return "Discarded=post_body_too_large";
+
+          default:
+            return "Discarded=unknown_error";
+        }
+      };
+      let err = xhrStatus(xhr.status);
+      if (err.length && err.startsWith("Discarded=")) {
+        // Place the error code after, otherwise JS will complain we start
+        // with a number when dealing with the telemetry value on JS side
+        const errMsg = `${err.split("Discarded=")[1]}_${xhr.status}`;
+        Glean.crashSubmission.collectorErrors[errMsg].add();
+        failmsg = `received bad response: ${xhr.status} ${err}`;
+      }
+      if (xhr.status === 0) {
+        Glean.crashSubmission.channelStatus[xhr.channel.status].add();
+      }
+    }
+    let submitted = !!ret.CrashID;
+
+    if (this.recordSubmission) {
+      let result = submitted
+        ? manager.SUBMISSION_RESULT_OK
+        : manager.SUBMISSION_RESULT_FAILED;
+      await manager.addSubmissionResult(
+        this.id,
+        submissionID,
+        new Date(),
+        result
+      );
+      if (submitted) {
+        manager.setRemoteCrashID(this.id, ret.CrashID);
+      }
+    }
+
+    if (submitted) {
+      this.submitSuccess(ret);
+    } else {
+      this.notifyStatus(
+        FAILED,
+        failmsg || "did not receive a crash ID in server response"
+      );
+      this.cleanup();
+    }
   },
 
   // `ret` is determined based on `status`:

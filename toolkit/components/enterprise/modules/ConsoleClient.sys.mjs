@@ -40,6 +40,14 @@ ChromeUtils.defineLazyGetter(lazy, "log", () => {
 export const CONSOLE_ADDRESS_PREF = "enterprise.console.address";
 
 /**
+ * Environment variable used to hand the current access token to the out-of-process
+ * crash reporter. The crash reporter is spawned by the crashing browser and
+ * inherits its environment, so keeping this in sync lets crash reports and pings
+ * authenticate with the console. See toolkit/crashreporter/client/app/src/net/auth.rs.
+ */
+const CRASHREPORTER_AUTH_TOKEN_ENV = "MOZ_CRASHREPORTER_AUTH_TOKEN";
+
+/**
  * Error logged when user needs to reauthenticate to obtain new token data
  */
 class ReauthRequiredError extends Error {
@@ -808,12 +816,32 @@ export const ConsoleClient = {
       Services.obs.addObserver(this, "felt-firefox-access-token-refreshed");
       Services.obs.addObserver(this, "felt-firefox-shutdown");
 
+      // Seed the crash reporter with any token already available at startup.
+      this._syncCrashReporterAuthToken();
+
       this.consoleBaseURI.then(
         ({ hostname }) => lazy.ConsoleProxyBypassFilter.register(hostname),
         e => lazy.log.error("Failed to register console proxy bypass:", e)
       );
     }
     return this;
+  },
+
+  /**
+   * Export the current access token into the environment so the out-of-process
+   * crash reporter (which inherits this process's environment when spawned)
+   * can authenticate crash report and crash ping uploads with the console.
+   * Called on every token update in the browser process.
+   */
+  _syncCrashReporterAuthToken() {
+    try {
+      Services.env.set(
+        CRASHREPORTER_AUTH_TOKEN_ENV,
+        Services.felt.getAccessTokenIfValid() || ""
+      );
+    } catch (e) {
+      lazy.log.warn("Failed to sync crash reporter auth token", e);
+    }
   },
 
   observe(_, topic) {
@@ -840,6 +868,8 @@ export const ConsoleClient = {
         this._refreshResolve?.();
         // The `finally()` block of our promise chain will
         // reset/nullify the promise.
+        // Keep the crash reporter's inherited token in sync.
+        this._syncCrashReporterAuthToken();
         break;
       }
       case "nsPref:changed": {

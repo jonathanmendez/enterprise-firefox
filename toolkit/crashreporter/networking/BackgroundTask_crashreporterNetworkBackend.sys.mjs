@@ -28,6 +28,7 @@ async function createRequestInit(requestBuilder) {
       }
       return {
         method: "POST",
+        headers: Object.fromEntries(requestBuilder.headers ?? []),
         body: formData,
       };
     }
