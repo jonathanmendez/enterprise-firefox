@@ -183,19 +183,19 @@ mod uploader {
             let upload_request = upload_request.capable(|cap| cap.is_empty()).unwrap();
 
             let do_send = move || {
-                // In Firefox Enterprise, crash pings go to the admin console and
-                // must carry the Felt bearer token exported by the crashing
-                // process (best-effort: attached only if a token is present).
-                #[cfg(feature = "enterprise")]
-                let headers = {
-                    let mut headers = upload_request.headers.clone();
-                    if let Some(header) = crate::net::auth::enterprise_authorization_header() {
-                        headers.push(header);
+                cfg_if::cfg_if! {
+                    if #[cfg(feature = "enterprise")] {
+                        let headers = {
+                            let mut headers = upload_request.headers.clone();
+                            if let Some(header) = crate::net::auth::enterprise_authorization_header() {
+                                headers.push(header);
+                            }
+                            headers
+                        };
+                    } else {
+                        let headers = &upload_request.headers;
                     }
-                    headers
-                };
-                #[cfg(not(feature = "enterprise"))]
-                let headers = &upload_request.headers;
+                }
 
                 let request_builder = http::RequestBuilder::Post {
                     body: upload_request.body.as_slice(),

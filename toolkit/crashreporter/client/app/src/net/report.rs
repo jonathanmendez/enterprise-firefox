@@ -35,8 +35,8 @@ pub struct CrashReport<'a> {
     pub dump_file: &'a Path,
     pub memory_file: Option<&'a Path>,
     pub url: &'a str,
-    /// Extra HTTP headers (e.g. an enterprise `Authorization` header). Empty
-    /// for non-enterprise uploads.
+    /// Extra HTTP headers (e.g. an enterprise `Authorization` header).
+    #[cfg(feature = "enterprise")]
     pub auth_headers: Vec<(String, String)>,
 }
 
@@ -90,13 +90,14 @@ impl CrashReport<'_> {
                 })
             }
 
-            request = Some(
-                http::RequestBuilder::MimePost {
-                    parts,
-                    headers: self.auth_headers.as_slice(),
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "enterprise")] {
+                    let headers = self.auth_headers.as_slice();
+                } else {
+                    let headers: &[(String, String)] = &[];
                 }
-                .build(self.url)?,
-            );
+            };
+            request = Some(http::RequestBuilder::MimePost { parts, headers }.build(self.url)?);
         }
 
         let response = request.unwrap().send()?;
@@ -155,6 +156,7 @@ mod test {
                 dump_file: Path::new("minidump.dmp"),
                 memory_file,
                 url: "reports.example.com".as_ref(),
+                #[cfg(feature = "enterprise")]
                 auth_headers: Vec::new(),
             };
 
@@ -205,6 +207,7 @@ mod test {
         }
     }
 
+    #[cfg(feature = "enterprise")]
     #[test]
     fn report_auth_headers() {
         let report = CrashReport {
@@ -248,6 +251,7 @@ mod test {
             dump_file: Path::new("minidump.dmp"),
             memory_file: None,
             url: "reports.example.com".as_ref(),
+            #[cfg(feature = "enterprise")]
             auth_headers: Vec::new(),
         };
 
