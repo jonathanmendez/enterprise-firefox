@@ -232,6 +232,12 @@ Submitter.prototype = {
               case 400:
                 return xhr.responseText;
 
+              case 401:
+                return "Discarded=unauthorized";
+
+              case 403:
+                return "Discarded=forbidden";
+
               case 413:
                 return "Discarded=post_body_too_large";
 
