@@ -26,9 +26,13 @@ async function createRequestInit(requestBuilder) {
         }
         formData.append(part.name, content, part.filename);
       }
+      const headers = Object.create(null);
+      for (const [k, v] of requestBuilder.headers) {
+        headers[k] = v;
+      }
       return {
         method: "POST",
-        headers: Object.fromEntries(requestBuilder.headers ?? []),
+        headers: headers,
         body: formData,
       };
     }
