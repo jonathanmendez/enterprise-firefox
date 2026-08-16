@@ -32,7 +32,7 @@ async function createRequestInit(requestBuilder) {
       }
       return {
         method: "POST",
-        headers: headers,
+        headers,
         body: formData,
       };
     }
