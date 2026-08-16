@@ -185,21 +185,19 @@ mod uploader {
             let do_send = move || {
                 cfg_if::cfg_if! {
                     if #[cfg(feature = "enterprise")] {
-                        let headers = {
-                            let mut headers = upload_request.headers.clone();
-                            if let Some(header) = crate::net::auth::enterprise_authorization_header() {
-                                headers.push(header);
-                            }
-                            headers
-                        };
+                        let mut pairs = upload_request.headers.clone();
+                        if let Some(header) = crate::net::auth::enterprise_authorization_header() {
+                            pairs.push(header);
+                        }
+                        let headers = http::header_map_from_pairs(pairs);
                     } else {
-                        let headers = &upload_request.headers;
+                        let headers = http::header_map_from_pairs(upload_request.headers.clone());
                     }
                 }
 
                 let request_builder = http::RequestBuilder::Post {
                     body: upload_request.body.as_slice(),
-                    headers: headers.as_slice(),
+                    headers,
                 };
 
                 match request_builder.build(upload_request.url.as_ref()) {

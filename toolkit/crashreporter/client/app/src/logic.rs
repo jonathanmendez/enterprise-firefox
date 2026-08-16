@@ -651,7 +651,9 @@ impl ReportCrash {
             memory_file: memory_file.as_deref(),
             url,
             #[cfg(feature = "enterprise")]
-            auth_headers: net::auth::enterprise_authorization_headers(),
+            auth_headers: net::http::header_map_from_pairs(
+                net::auth::enterprise_authorization_header(),
+            ),
         };
 
         let report_response = async_scoped_thread(|| report.send())

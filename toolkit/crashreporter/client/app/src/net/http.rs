@@ -19,8 +19,11 @@ use crate::std::{
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
 use anyhow::Context;
+pub use http::HeaderMap;
+use http::{header::AUTHORIZATION, HeaderName, HeaderValue};
 use once_cell::sync::Lazy;
 use serde::Serialize;
+use std::str::FromStr;
 
 #[cfg(mock)]
 use crate::std::mock::{mock_key, MockKey};
@@ -112,19 +115,71 @@ std::mock::mocked_static! {
  */
 
 /// Types of requests that can be created.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum RequestBuilder<'a> {
     /// Send a POST with multiple mime parts.
     MimePost {
         parts: Vec<MimePart<'a>>,
-        headers: &'a [(String, String)],
+        #[serde(serialize_with = "serialize_headers")]
+        headers: HeaderMap,
     },
     /// Send a POST.
     Post {
         body: &'a [u8],
-        headers: &'a [(String, String)],
+        #[serde(serialize_with = "serialize_headers")]
+        headers: HeaderMap,
     },
+}
+
+/// Build a [`HeaderMap`] from name/value string pairs, dropping (with a warning)
+/// any entries that are not valid HTTP headers.
+///
+/// Using the typed [`HeaderName`]/[`HeaderValue`] here guarantees the header
+/// names and values cannot contain CR/LF, NUL, or other control characters, so
+/// they cannot inject additional headers or corrupt request framing when later
+/// formatted for curl/libcurl. The `Authorization` value is additionally marked
+/// sensitive so it is redacted from debug logging.
+pub fn header_map_from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    for (name, value) in pairs {
+        match (HeaderName::from_str(&name), HeaderValue::from_str(&value)) {
+            (Ok(name), Ok(mut value)) => {
+                if name == AUTHORIZATION {
+                    value.set_sensitive(true);
+                }
+                map.append(name, value);
+            }
+            _ => log::warn!("dropping invalid crash upload header {name:?}"),
+        }
+    }
+    map
+}
+
+/// Format a header as a `name: value` line for curl/libcurl, or `None` if the
+/// value is not representable as a string. The value is already guaranteed
+/// free of CR/LF and control characters by [`HeaderValue`], so the resulting
+/// line cannot inject additional headers.
+fn curl_header_line(name: &HeaderName, value: &HeaderValue) -> Option<String> {
+    value
+        .to_str()
+        .ok()
+        .map(|value| format!("{}: {}", name.as_str(), value))
+}
+
+/// Serialize a [`HeaderMap`] as an array of `[name, value]` pairs, matching the
+/// JSON format expected by `BackgroundTask_crashreporterNetworkBackend.sys.mjs`.
+fn serialize_headers<S>(headers: &HeaderMap, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(headers.len()))?;
+    for (name, value) in headers.iter() {
+        let value = value.to_str().map_err(serde::ser::Error::custom)?;
+        seq.serialize_element(&(name.as_str(), value))?;
+    }
+    seq.end()
 }
 
 /// A single mime part to send.
@@ -270,16 +325,20 @@ impl<'a> RequestBuilder<'a> {
 
         match self {
             Self::MimePost { parts, headers } => {
-                for (k, v) in headers.iter() {
-                    cmd.args(["--header", &format!("{k}: {v}")]);
+                for (name, value) in headers.iter() {
+                    if let Some(line) = curl_header_line(name, value) {
+                        cmd.args(["--header", &line]);
+                    }
                 }
                 for part in parts {
                     part.curl_command_args(&mut cmd, &mut stdin)?;
                 }
             }
             Self::Post { body, headers } => {
-                for (k, v) in headers.iter() {
-                    cmd.args(["--header", &format!("{k}: {v}")]);
+                for (name, value) in headers.iter() {
+                    if let Some(line) = curl_header_line(name, value) {
+                        cmd.args(["--header", &line]);
+                    }
                 }
 
                 cmd.args(["--data-binary", "@-"]);
@@ -310,8 +369,10 @@ impl<'a> RequestBuilder<'a> {
             Self::MimePost { parts, headers } => {
                 if !headers.is_empty() {
                     let mut header_list = easy.slist();
-                    for (k, v) in headers.iter() {
-                        header_list.append(&format!("{k}: {v}"))?;
+                    for (name, value) in headers.iter() {
+                        if let Some(line) = curl_header_line(name, value) {
+                            header_list.append(&line)?;
+                        }
                     }
                     easy.set_headers(header_list)?;
                 }
@@ -326,8 +387,10 @@ impl<'a> RequestBuilder<'a> {
             }
             Self::Post { body, headers } => {
                 let mut header_list = easy.slist();
-                for (k, v) in headers.iter() {
-                    header_list.append(&format!("{k}: {v}"))?;
+                for (name, value) in headers.iter() {
+                    if let Some(line) = curl_header_line(name, value) {
+                        header_list.append(&line)?;
+                    }
                 }
                 easy.set_headers(header_list)?;
 

@@ -28,12 +28,6 @@ pub fn enterprise_authorization_header() -> Option<(String, String)> {
     Some(("Authorization".to_owned(), format!("Bearer {token}")))
 }
 
-/// Convenience wrapper returning the header(s) as a `Vec` suitable for passing
-/// to `RequestBuilder`.
-pub fn enterprise_authorization_headers() -> Vec<(String, String)> {
-    enterprise_authorization_header().into_iter().collect()
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
