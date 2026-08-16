@@ -14,6 +14,7 @@
 #include "nsIDUtils.h"
 #include "nsIFileStreams.h"
 #include "nsNetUtil.h"
+#include "nsReadableUtils.h"
 #include "nsString.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/GeckoArgs.h"
@@ -228,6 +229,11 @@ static CrashHelperClient* gCrashHelperClient
 static google_breakpad::ExceptionHandler* gExceptionHandler = nullptr;
 static mozilla::Atomic<bool> gEncounteredChildException(false);
 constinit static nsCString gServerURL;
+// Full "KEY=VALUE" environment entry for the enterprise auth token, passed only
+// to the crash reporter child process (never set in our own environment).
+// Empty when there is no token. Pre-formatted so the crash path only has to
+// read it, without any allocation.
+constinit static nsCString gAuthTokenEnvEntry;
 
 static MOZ_GLIBCXX_CONSTINIT xpstring pendingDirectory;
 static MOZ_GLIBCXX_CONSTINIT xpstring crashReporterPath;
@@ -1188,6 +1194,11 @@ static void AnnotateMemoryStatus(AnnotationTable&) {
  * @param aMinidumpPath The path of the minidump file, passed as an argument
  *        to the launched program
  */
+#  if !defined(XP_WIN) && !defined(XP_MACOSX)
+// Used to build a child-only environment for the crash reporter on Linux.
+extern "C" char** environ;
+#  endif
+
 static bool LaunchProgram(const XP_CHAR* aProgramPath,
                           const XP_CHAR* aMinidumpPath) {
 #  ifdef XP_WIN
@@ -1205,13 +1216,38 @@ static bool LaunchProgram(const XP_CHAR* aProgramPath,
   STARTUPINFO si = {};
   si.cb = sizeof(si);
 
+  DWORD creationFlags =
+      NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB;
+  LPVOID envBlock = nullptr;  // null => inherit our environment
+  // Storage for a custom environment block; must outlive the CreateProcess
+  // call.
+  nsAutoString childEnv;
+  if (!gAuthTokenEnvEntry.IsEmpty()) {
+    // Build a child-only environment block (a copy of ours plus the auth token)
+    // so the token is passed to the crash reporter alone, rather than living in
+    // our environment where every child process would inherit it.
+    LPWCH curEnv = GetEnvironmentStringsW();
+    if (curEnv) {
+      for (LPWCH v = curEnv; *v; v += wcslen(v) + 1) {
+        childEnv.Append(
+            nsDependentString(reinterpret_cast<const char16_t*>(v)));
+        childEnv.Append(char16_t(0));
+      }
+      FreeEnvironmentStringsW(curEnv);
+      AppendUTF8toUTF16(gAuthTokenEnvEntry, childEnv);
+      childEnv.Append(char16_t(0));  // terminate the token entry
+      childEnv.Append(char16_t(0));  // terminate the block
+      envBlock = reinterpret_cast<LPVOID>(childEnv.BeginWriting());
+      creationFlags |= CREATE_UNICODE_ENVIRONMENT;
+    }
+  }
+
   // If CreateProcess() fails don't do anything.
   if (CreateProcess(
           /* lpApplicationName */ nullptr, (LPWSTR)cmdLine,
           /* lpProcessAttributes */ nullptr, /* lpThreadAttributes */ nullptr,
-          /* bInheritHandles */ FALSE,
-          NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB,
-          /* lpEnvironment */ nullptr, /* lpCurrentDirectory */ nullptr, &si,
+          /* bInheritHandles */ FALSE, creationFlags,
+          /* lpEnvironment */ envBlock, /* lpCurrentDirectory */ nullptr, &si,
           &pi)) {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
@@ -1227,6 +1263,25 @@ static bool LaunchProgram(const XP_CHAR* aProgramPath,
     env = *nsEnv;
   }
 
+  // If we have an auth token, pass it to the crash reporter through a
+  // child-only copy of the environment rather than setting it in our own
+  // environment (where every child process would inherit it). Built on the
+  // stack to avoid allocation on the crash path.
+  static const size_t kMaxEnvEntries = 512;
+  char* childEnv[kMaxEnvEntries + 2];
+  if (env && !gAuthTokenEnvEntry.IsEmpty()) {
+    size_t n = 0;
+    while (env[n] && n < kMaxEnvEntries) {
+      childEnv[n] = env[n];
+      ++n;
+    }
+    if (!env[n]) {  // the environment fit within our bound
+      childEnv[n++] = const_cast<char*>(gAuthTokenEnvEntry.get());
+      childEnv[n] = nullptr;
+      env = childEnv;
+    }
+  }
+
   int rv = posix_spawnp(&pid, my_argv[0], nullptr, nullptr, my_argv, env);
 
   if (rv != 0) {
@@ -1238,6 +1293,28 @@ static bool LaunchProgram(const XP_CHAR* aProgramPath,
   if (pid == -1) {
     return false;
   } else if (pid == 0) {
+    // If we have an auth token, hand it to the crash reporter through a
+    // child-only environment rather than setting it in our own environment
+    // (where every child process would inherit it). We are post-fork in a
+    // signal-handler context, so the replacement environment is built on the
+    // stack, without heap allocation.
+    if (!gAuthTokenEnvEntry.IsEmpty()) {
+      static const size_t kMaxEnvEntries = 512;
+      char* childEnv[kMaxEnvEntries + 2];
+      size_t n = 0;
+      while (environ[n] && n < kMaxEnvEntries) {
+        childEnv[n] = environ[n];
+        ++n;
+      }
+      if (!environ[n]) {  // the environment fit within our bound
+        childEnv[n++] = const_cast<char*>(gAuthTokenEnvEntry.get());
+        childEnv[n] = nullptr;
+        char* const my_argv[] = {const_cast<char*>(aProgramPath),
+                                 const_cast<char*>(aMinidumpPath), nullptr};
+        (void)execve(aProgramPath, my_argv, childEnv);
+        // If execve() failed, fall through to the plain execl() below.
+      }
+    }
     (void)execl(aProgramPath, aProgramPath, aMinidumpPath, nullptr);
     _exit(1);
   }
@@ -2303,6 +2380,7 @@ nsresult UnsetExceptionHandler() {
   delete gExceptionHandler;
 
   gServerURL = "";
+  gAuthTokenEnvEntry.Truncate();
   TeardownAppNotes();
 
   if (!gExceptionHandler) return NS_ERROR_NOT_INITIALIZED;
@@ -2623,6 +2701,19 @@ nsresult SetServerURL(const nsACString& aServerURL) {
   // Store the server URL as an annotation, the crash reporter client knows how
   // to handle this specially.
   gServerURL = aServerURL;
+  return NS_OK;
+}
+
+nsresult SetAuthToken(const nsACString& aToken) {
+  // Pre-format the full environment entry so that LaunchProgram (which runs on
+  // the crash path) only has to reference it without allocating. The token is
+  // handed to the crash reporter child alone, not set in our own environment.
+  if (aToken.IsEmpty()) {
+    gAuthTokenEnvEntry.Truncate();
+  } else {
+    gAuthTokenEnvEntry.AssignLiteral("MOZ_CRASHREPORTER_AUTH_TOKEN=");
+    gAuthTokenEnvEntry.Append(aToken);
+  }
   return NS_OK;
 }
 
@@ -3721,6 +3812,7 @@ bool UnsetRemoteExceptionHandler(bool wasSet) {
   }
 #endif
   gServerURL = "";
+  gAuthTokenEnvEntry.Truncate();
   TeardownAppNotes();
 
   return true;

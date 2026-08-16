@@ -196,4 +196,10 @@ interface nsICrashReporter : nsISupports
    * @throws NS_ERROR_NOT_INITIALIZED if crash reporting is disabled.
    */
   void saveMemoryReport();
+
+  /**
+   * Set the bearer token used to authenticate crash report and crash ping
+   * uploads to the enterprise console. Pass an empty string to clear it.
+   */
+  void setAuthToken(in ACString token);
 };
