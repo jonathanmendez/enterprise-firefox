@@ -2,11 +2,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
+
 const lazy = {};
 
-ChromeUtils.defineESModuleGetters(lazy, {
-  ConsoleClient: "resource://gre/modules/enterprise/ConsoleClient.sys.mjs",
-});
+// ConsoleClient only exists in enterprise builds (toolkit/components/enterprise
+// is gated on MOZ_ENTERPRISE), so only define the getter there.
+if (AppConstants.MOZ_ENTERPRISE) {
+  ChromeUtils.defineESModuleGetters(lazy, {
+    ConsoleClient: "resource://gre/modules/enterprise/ConsoleClient.sys.mjs",
+  });
+}
 
 const SUCCESS = "success";
 const FAILED = "failed";
@@ -145,6 +151,9 @@ Submitter.prototype = {
       serverURL = envOverride;
     }
 
+    let xhr;
+    let didAuthRetry = false;
+
     let formData = new FormData();
 
     // tell the server not to throttle this if requested
@@ -200,131 +209,133 @@ Submitter.prototype = {
     let manager = Services.crashmanager;
     let submissionID = manager.generateSubmissionID();
 
-    this.sendRequest(
-      serverURL,
-      formData,
-      promises,
-      manager,
-      submissionID
-    ).catch(err => {
-      this.notifyStatus(FAILED, `failed to send crash report: ${err}`);
-      this.cleanup();
+    let onReadyStateChange = () => {
+      if (xhr.readyState == 4) {
+        // Enterprise: if the console rejected the token, refresh it and retry
+        // once before falling through to the normal response handling below.
+        if (
+          AppConstants.MOZ_ENTERPRISE &&
+          !didAuthRetry &&
+          (xhr.status === 401 || xhr.status === 403) &&
+          Services.felt?.isFeltBrowser?.()
+        ) {
+          didAuthRetry = true;
+          this.refreshAuthToken().then(resend);
+          return;
+        }
+        let ret =
+          xhr.status === 200 ? this.parseResponse(xhr.responseText) : {};
+        let failmsg;
+        if (xhr.status !== 200) {
+          const xhrStatus = code => {
+            switch (code) {
+              case 400:
+                return xhr.responseText;
+
+              case 413:
+                return "Discarded=post_body_too_large";
+
+              default:
+                return "Discarded=unknown_error";
+            }
+          };
+          let err = xhrStatus(xhr.status);
+          if (err.length && err.startsWith("Discarded=")) {
+            // Place the error code after, otherwise JS will complain we start
+            // with a number when dealing with the telemetry value on JS side
+            const errMsg = `${err.split("Discarded=")[1]}_${xhr.status}`;
+            Glean.crashSubmission.collectorErrors[errMsg].add();
+            failmsg = `received bad response: ${xhr.status} ${err}`;
+          }
+          if (xhr.status === 0) {
+            Glean.crashSubmission.channelStatus[xhr.channel.status].add();
+          }
+        }
+        let submitted = !!ret.CrashID;
+        let p = Promise.resolve();
+
+        if (this.recordSubmission) {
+          let result = submitted
+            ? manager.SUBMISSION_RESULT_OK
+            : manager.SUBMISSION_RESULT_FAILED;
+          p = manager.addSubmissionResult(
+            this.id,
+            submissionID,
+            new Date(),
+            result
+          );
+          if (submitted) {
+            manager.setRemoteCrashID(this.id, ret.CrashID);
+          }
+        }
+
+        p.then(() => {
+          if (submitted) {
+            this.submitSuccess(ret);
+          } else {
+            this.notifyStatus(
+              FAILED,
+              failmsg || "did not receive a crash ID in server response"
+            );
+            this.cleanup();
+          }
+        });
+      }
+    };
+
+    // Enterprise auth as a thin wrapper around the send: build the request,
+    // apply the bearer token, attach the (upstream) response handler, and send.
+    // The handler above calls this again to retry once with a refreshed token.
+    let resend = token => {
+      xhr = new XMLHttpRequest();
+      xhr.open("POST", serverURL, true);
+      if (token) {
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      }
+      xhr.addEventListener("readystatechange", onReadyStateChange);
+      xhr.send(formData);
+    };
+
+    let p = Promise.all(promises);
+    let id = this.id;
+
+    if (this.recordSubmission) {
+      p = p.then(() => {
+        return manager.addSubmissionAttempt(id, submissionID, new Date());
+      });
+    }
+    p.then(async () => {
+      resend(await this.getAuthToken());
     });
     return true;
   },
 
-  // In Firefox Enterprise crash reports are uploaded to the admin console,
-  // which requires the same Felt bearer token used for other console
-  // communication. Returns the access token, or null for non-enterprise
-  // builds (where uploads remain unauthenticated).
+  // Returns the Felt access token used to authenticate uploads to the
+  // enterprise admin console, or null for non-enterprise builds (where uploads
+  // remain unauthenticated). Never throws: on failure the report is sent
+  // unauthenticated and recorded as a failed submission.
   async getAuthToken() {
-    if (!Services.felt?.isFeltBrowser?.()) {
+    if (!AppConstants.MOZ_ENTERPRISE || !Services.felt?.isFeltBrowser?.()) {
       return null;
     }
-    return lazy.ConsoleClient.getAccessToken();
+    try {
+      return await lazy.ConsoleClient.getAccessToken();
+    } catch {
+      return null;
+    }
   },
 
-  // Force a token refresh, then return the new access token. Used to retry a
-  // submission that was rejected with a 401/403.
+  // Force a Felt token refresh and return the new access token, or null on
+  // failure. Never throws; used to retry a submission rejected with 401/403.
   async refreshAuthToken() {
-    if (!Services.felt?.isFeltBrowser?.()) {
+    if (!AppConstants.MOZ_ENTERPRISE || !Services.felt?.isFeltBrowser?.()) {
       return null;
     }
-    await lazy.ConsoleClient._refreshSession();
-    return lazy.ConsoleClient.getAccessToken();
-  },
-
-  // Build and send a single XHR, resolving with it once it completes.
-  sendOnce(serverURL, formData, authToken) {
-    return new Promise(resolve => {
-      let xhr = new XMLHttpRequest();
-      xhr.open("POST", serverURL, true);
-      if (authToken) {
-        xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
-      }
-      xhr.addEventListener("readystatechange", () => {
-        if (xhr.readyState == 4) {
-          resolve(xhr);
-        }
-      });
-      xhr.send(formData);
-    });
-  },
-
-  async sendRequest(serverURL, formData, promises, manager, submissionID) {
-    await Promise.all(promises);
-
-    if (this.recordSubmission) {
-      await manager.addSubmissionAttempt(this.id, submissionID, new Date());
-    }
-
-    let authToken = await this.getAuthToken();
-    let xhr = await this.sendOnce(serverURL, formData, authToken);
-
-    // If the console rejected the token, refresh it once and retry.
-    if (authToken && (xhr.status === 401 || xhr.status === 403)) {
-      let refreshed = await this.refreshAuthToken();
-      if (refreshed) {
-        xhr = await this.sendOnce(serverURL, formData, refreshed);
-      }
-    }
-
-    await this.handleResponse(xhr, manager, submissionID);
-  },
-
-  async handleResponse(xhr, manager, submissionID) {
-    let ret = xhr.status === 200 ? this.parseResponse(xhr.responseText) : {};
-    let failmsg;
-    if (xhr.status !== 200) {
-      const xhrStatus = code => {
-        switch (code) {
-          case 400:
-            return xhr.responseText;
-
-          case 413:
-            return "Discarded=post_body_too_large";
-
-          default:
-            return "Discarded=unknown_error";
-        }
-      };
-      let err = xhrStatus(xhr.status);
-      if (err.length && err.startsWith("Discarded=")) {
-        // Place the error code after, otherwise JS will complain we start
-        // with a number when dealing with the telemetry value on JS side
-        const errMsg = `${err.split("Discarded=")[1]}_${xhr.status}`;
-        Glean.crashSubmission.collectorErrors[errMsg].add();
-        failmsg = `received bad response: ${xhr.status} ${err}`;
-      }
-      if (xhr.status === 0) {
-        Glean.crashSubmission.channelStatus[xhr.channel.status].add();
-      }
-    }
-    let submitted = !!ret.CrashID;
-
-    if (this.recordSubmission) {
-      let result = submitted
-        ? manager.SUBMISSION_RESULT_OK
-        : manager.SUBMISSION_RESULT_FAILED;
-      await manager.addSubmissionResult(
-        this.id,
-        submissionID,
-        new Date(),
-        result
-      );
-      if (submitted) {
-        manager.setRemoteCrashID(this.id, ret.CrashID);
-      }
-    }
-
-    if (submitted) {
-      this.submitSuccess(ret);
-    } else {
-      this.notifyStatus(
-        FAILED,
-        failmsg || "did not receive a crash ID in server response"
-      );
-      this.cleanup();
+    try {
+      await lazy.ConsoleClient._refreshSession();
+      return await lazy.ConsoleClient.getAccessToken();
+    } catch {
+      return null;
     }
   },
 
