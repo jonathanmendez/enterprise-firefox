@@ -156,15 +156,10 @@ pub fn header_map_from_pairs(pairs: impl IntoIterator<Item = (String, String)>) 
     map
 }
 
-/// Format a header as a `name: value` line for curl/libcurl, or `None` if the
-/// value is not representable as a string. The value is already guaranteed
-/// free of CR/LF and control characters by [`HeaderValue`], so the resulting
-/// line cannot inject additional headers.
-fn curl_header_line(name: &HeaderName, value: &HeaderValue) -> Option<String> {
-    value
-        .to_str()
-        .ok()
-        .map(|value| format!("{}: {}", name.as_str(), value))
+/// Format a header as a `name: value` line for curl/libcurl.
+/// We only construct HeaderValues with from_str so to_str is safe to unwrap.
+fn curl_header_line(name: &HeaderName, value: &HeaderValue) -> String {
+    format!("{}: {}", name.as_str(), value.to_str().unwrap())
 }
 
 /// Serialize a [`HeaderMap`] as an array of `[name, value]` pairs, matching the
@@ -326,9 +321,7 @@ impl<'a> RequestBuilder<'a> {
         match self {
             Self::MimePost { parts, headers } => {
                 for (name, value) in headers.iter() {
-                    if let Some(line) = curl_header_line(name, value) {
-                        cmd.args(["--header", &line]);
-                    }
+                    cmd.args(["--header", &curl_header_line(name, value)]);
                 }
                 for part in parts {
                     part.curl_command_args(&mut cmd, &mut stdin)?;
@@ -336,9 +329,7 @@ impl<'a> RequestBuilder<'a> {
             }
             Self::Post { body, headers } => {
                 for (name, value) in headers.iter() {
-                    if let Some(line) = curl_header_line(name, value) {
-                        cmd.args(["--header", &line]);
-                    }
+                    cmd.args(["--header", &curl_header_line(name, value)]);
                 }
 
                 cmd.args(["--data-binary", "@-"]);
@@ -370,9 +361,7 @@ impl<'a> RequestBuilder<'a> {
                 if !headers.is_empty() {
                     let mut header_list = easy.slist();
                     for (name, value) in headers.iter() {
-                        if let Some(line) = curl_header_line(name, value) {
-                            header_list.append(&line)?;
-                        }
+                        header_list.append(&curl_header_line(name, value))?;
                     }
                     easy.set_headers(header_list)?;
                 }
@@ -388,9 +377,7 @@ impl<'a> RequestBuilder<'a> {
             Self::Post { body, headers } => {
                 let mut header_list = easy.slist();
                 for (name, value) in headers.iter() {
-                    if let Some(line) = curl_header_line(name, value) {
-                        header_list.append(&line)?;
-                    }
+                    header_list.append(&curl_header_line(name, value))?;
                 }
                 easy.set_headers(header_list)?;
 
