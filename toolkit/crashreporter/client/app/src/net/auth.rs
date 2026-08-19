@@ -36,7 +36,7 @@ mod test {
     fn run_with_env(value: Option<&str>) -> Option<(String, String)> {
         let mut builder = mock::builder();
         if let Some(value) = value {
-            builder = builder.set(MockEnv(ekey!("AUTH_TOKEN").into()), value.to_owned());
+            builder.set(MockEnv(ekey!("AUTH_TOKEN").into()), value.to_owned());
         }
         builder.run(enterprise_authorization_header)
     }
