@@ -2727,15 +2727,15 @@ nsresult SetServerURL(const nsACString& aServerURL) {
 }
 
 nsresult SetAuthToken(const nsACString& aToken) {
-  // Pre-format the full environment entry so that LaunchProgram (which runs on
-  // the crash path) only has to reference it without allocating. The token is
-  // handed to the crash reporter child alone, not set in our own environment.
-  if (aToken.IsEmpty()) {
+  if (aToken.IsEmpty() || aToken.FindChar('\0') != kNotFound) {
     gAuthTokenEnvEntry.Truncate();
-  } else {
-    gAuthTokenEnvEntry.AssignLiteral("MOZ_CRASHREPORTER_AUTH_TOKEN=");
-    gAuthTokenEnvEntry.Append(aToken);
+    return aToken.IsEmpty() ? NS_OK : NS_ERROR_INVALID_ARG;
   }
+
+  // Pre-format the full environment entry so that LaunchProgram (which runs on
+  // the crash path) only has to reference it without allocating.
+  gAuthTokenEnvEntry.AssignLiteral("MOZ_CRASHREPORTER_AUTH_TOKEN=");
+  gAuthTokenEnvEntry.Append(aToken);
   return NS_OK;
 }
 
