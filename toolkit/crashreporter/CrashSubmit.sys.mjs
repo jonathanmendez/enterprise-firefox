@@ -151,7 +151,6 @@ Submitter.prototype = {
       serverURL = envOverride;
     }
 
-    let xhr;
     let didAuthRetry = false;
 
     let formData = new FormData();
@@ -209,7 +208,8 @@ Submitter.prototype = {
     let manager = Services.crashmanager;
     let submissionID = manager.generateSubmissionID();
 
-    let onReadyStateChange = () => {
+    let onReadyStateChange = event => {
+      const xhr = event.target;
       if (xhr.readyState == 4) {
         // Enterprise: if the console rejected the token, refresh it and retry
         // once before falling through to the normal response handling below.
@@ -220,7 +220,7 @@ Submitter.prototype = {
           Services.felt?.isFeltBrowser?.()
         ) {
           didAuthRetry = true;
-          this.refreshAuthToken().then(resend);
+          send(true);
           return;
         }
         let ret =
@@ -289,11 +289,15 @@ Submitter.prototype = {
       }
     };
 
-    // Enterprise auth as a thin wrapper around the send: build the request,
-    // apply the bearer token, attach the (upstream) response handler, and send.
-    // The handler above calls this again to retry once with a refreshed token.
-    let resend = token => {
-      xhr = new XMLHttpRequest();
+    // Enterprise auth as a thin wrapper around the send: fetch the bearer token
+    // (refreshing it when retrying), build the request, attach the (upstream)
+    // response handler, and send. The handler above calls this again with
+    // `refresh = true` to retry once after the console rejected the token.
+    let send = async refresh => {
+      let token = refresh
+        ? await this.refreshAuthToken()
+        : await this.getAuthToken();
+      const xhr = new XMLHttpRequest();
       xhr.open("POST", serverURL, true);
       if (token) {
         xhr.setRequestHeader("Authorization", `Bearer ${token}`);
@@ -310,9 +314,7 @@ Submitter.prototype = {
         return manager.addSubmissionAttempt(id, submissionID, new Date());
       });
     }
-    p.then(async () => {
-      resend(await this.getAuthToken());
-    });
+    p.then(() => send(false));
     return true;
   },
 
