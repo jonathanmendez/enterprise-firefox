@@ -116,9 +116,6 @@ bool GetCrashEventsDir(nsAString& aPath);
 bool GetEnabled();
 bool GetServerURL(nsACString& aServerURL);
 nsresult SetServerURL(const nsACString& aServerURL);
-// Sets the bearer token passed (only) to the crash reporter child process to
-// authenticate enterprise console uploads. Pass an empty string to clear it.
-nsresult SetAuthToken(const nsACString& aToken);
 bool GetMinidumpPath(nsAString& aPath);
 nsresult SetMinidumpPath(const nsAString& aPath);
 
